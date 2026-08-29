@@ -19,7 +19,7 @@ ROUND_TIME = 60         # 每局秒数
 ROUNDS_TO_WIN = 2       # 三局两胜
 
 # ---------------------------------------------------------------- 玩家按键
-# P1：A/D 移动  W 跳  S 防御  J 近战  K 远程
+# P1：A/D 移动  W 跳  S 防御  J 近战  K 远程  L 投技（双击 A/D 冲刺/后撤）
 import pygame as _pg
 
 P1_KEYS = {
@@ -29,6 +29,7 @@ P1_KEYS = {
     "block":  _pg.K_s,
     "melee":  _pg.K_j,
     "ranged": _pg.K_k,
+    "throw":  _pg.K_l,
 }
 P2_KEYS = {
     "left":   _pg.K_LEFT,
@@ -37,6 +38,7 @@ P2_KEYS = {
     "block":  _pg.K_DOWN,
     "melee":  _pg.K_1,
     "ranged": _pg.K_2,
+    "throw":  _pg.K_3,
 }
 
 # ---------------------------------------------------------------- 机甲规格
@@ -53,6 +55,7 @@ MECH_SPECS = {
         "melee_range": 40,       # 判定盒前端离中心的距离
         "knockback": 3.6,
         "bolt_color": "hot",     # 光束弹配色（红橙）
+        "throw_damage": 18,      # 投技伤害（无视格挡）
     },
     "azure": {
         "name": "AZURE",
@@ -65,6 +68,7 @@ MECH_SPECS = {
         "melee_range": 40,
         "knockback": 3.2,
         "bolt_color": "cool",    # 光束弹配色（青蓝）
+        "throw_damage": 15,      # 投技伤害（无视格挡）
     },
 }
 
@@ -86,6 +90,27 @@ HITSTOP_FRAMES = 5              # 命中顿帧
 KO_SLOW_FRAMES = 80             # KO 慢镜头时长
 PUSHBOX_W = 22                  # 机体推挤盒宽度
 MIN_SEPARATION = 26             # 两机甲最小间距
+
+# ---------------------------------------------------------------- 阶段1：投技/冲刺/后撤/空中攻击
+# 投技：抓取范围内地面目标，无视格挡（可被跳跃/后撤步躲开）
+THROW_RANGE = 36                # 抓取距离（中心距）
+THROW_TOTAL = 26                # 投技整套帧数（落空也有大硬直，可被惩罚）
+THROW_HIT_T = 8                 # 第几帧判定抓取
+THROW_COOLDOWN = 45             # 投技冷却
+THROW_VX = 4.4                  # 被投者水平飞出速度
+THROW_VY = -4.6                 # 被投者浮空初速
+THROWN_LAND_STUN = 18           # 被投落地附加硬直
+# 冲刺 / 后撤步：双击同方向触发
+TAP_WINDOW = 14                 # 双击判定窗口（帧）
+DASH_FRAMES = 14                # 前冲帧数（第 4 帧起可取消出攻击）
+DASH_SPEED = 3.2
+BACKSTEP_FRAMES = 16            # 后撤步帧数
+BACKSTEP_SPEED = 3.8
+BACKSTEP_INVULN = (2, 11)       # 无敌帧区间 [起, 止)
+# 空中攻击：跳跃中按下近战键 → 下劈
+AIR_MELEE_TOTAL = 20
+AIR_MELEE_ACTIVE = (4, 14)      # 判定帧区间
+AIR_MELEE_MULT = 0.75           # 伤害倍率（基于 melee_damage）
 
 # ---------------------------------------------------------------- 颜色
 COLORS = {

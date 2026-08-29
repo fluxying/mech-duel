@@ -148,12 +148,14 @@ def draw_menu(surf, bg, frames, t):
         surf.blit(hint, (cx - hint.get_width() // 2, 166))
 
     fnt_help = get_font(9)
-    h1 = fnt_help.render("P1  GARNET: A/D 移动  W 跳  S 防御  J 斩击  K 光束", True, (215, 160, 150))
-    h2 = fnt_help.render("P2  AZURE : ←/→ 移动  ↑ 跳  ↓ 防御  1 斩击  2 光束", True, (150, 180, 230))
-    surf.blit(h1, (cx - h1.get_width() // 2, 200))
-    surf.blit(h2, (cx - h2.get_width() // 2, 214))
+    h1 = fnt_help.render("P1  GARNET: A/D 移动  W 跳  S 防御  J 斩击  K 光束  L 投技", True, (215, 160, 150))
+    h2 = fnt_help.render("P2  AZURE : ←/→ 移动  ↑ 跳  ↓ 防御  1 斩击  2 光束  3 投技", True, (150, 180, 230))
+    surf.blit(h1, (cx - h1.get_width() // 2, 198))
+    surf.blit(h2, (cx - h2.get_width() // 2, 212))
+    h4 = fnt_help.render("双击方向 冲刺/后撤 · 空中可斩击 · 投技无视防御", True, (255, 214, 100))
+    surf.blit(h4, (cx - h4.get_width() // 2, 226))
     h3 = fnt_help.render("三局两胜 · 每局 60 秒 · R 重开  ESC 菜单", True, (170, 170, 190))
-    surf.blit(h3, (cx - h3.get_width() // 2, 238))
+    surf.blit(h3, (cx - h3.get_width() // 2, 240))
 
 
 def draw_victory(surf, bg, winner_spec, wins1, wins2):

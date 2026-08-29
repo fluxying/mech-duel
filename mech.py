@@ -10,22 +10,32 @@ import pygame
 from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       MELEE_WINDUP, MELEE_ACTIVE, MELEE_RECOVER, MELEE_COOLDOWN,
                       RANGED_COOLDOWN, RANGED_COST, ENERGY_MAX, ENERGY_REGEN,
-                      BLOCK_REDUCE, HURT_STUN, MECH_SPECS, COLORS)
+                      BLOCK_REDUCE, HURT_STUN, MECH_SPECS, COLORS,
+                      THROW_TOTAL, THROW_HIT_T, THROW_COOLDOWN,
+                      THROW_VX, THROW_VY, THROWN_LAND_STUN,
+                      TAP_WINDOW, DASH_FRAMES, DASH_SPEED,
+                      BACKSTEP_FRAMES, BACKSTEP_SPEED, BACKSTEP_INVULN,
+                      AIR_MELEE_TOTAL, AIR_MELEE_ACTIVE, AIR_MELEE_MULT)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
 
 IDLE, WALK, JUMP, MELEE, SHOOT, BLOCK, HURT, KO = (
     "idle", "walk", "jump", "melee", "shoot", "block", "hurt", "ko")
+THROW, DASH, BACKSTEP, AIR_MELEE, THROWN = (
+    "throw", "dash", "backstep", "air_melee", "thrown")
 
-# 状态 -> 动画帧序列 [(帧名, 时长帧)]；MELEE 相位由 t 直接推算
+# 状态 -> 动画帧序列 [(帧名, 时长帧)]；MELEE/THROW/AIR_MELEE 相位由 t 直接推算
 ANIMS = {
-    IDLE:  [("idle", 36), ("idle", 36)],
-    WALK:  [("walk_a", 9), ("walk_b", 9)],
-    JUMP:  [("jump", 4)],
-    MELEE: [("atk0", MELEE_WINDUP), ("atk1", MELEE_ACTIVE), ("atk2", MELEE_RECOVER)],
-    SHOOT: [("shoot", 7), ("shoot", 11)],
-    BLOCK: [("block", 4)],
-    HURT:  [("hurt", 4)],
-    KO:    [("ko", 4)],
+    IDLE:      [("idle", 36), ("idle", 36)],
+    WALK:      [("walk_a", 9), ("walk_b", 9)],
+    JUMP:      [("jump", 4)],
+    MELEE:     [("atk0", MELEE_WINDUP), ("atk1", MELEE_ACTIVE), ("atk2", MELEE_RECOVER)],
+    SHOOT:     [("shoot", 7), ("shoot", 11)],
+    BLOCK:     [("block", 4)],
+    HURT:      [("hurt", 4)],
+    KO:        [("ko", 4)],
+    DASH:      [("walk_a", 4), ("walk_b", 4)],
+    BACKSTEP:  [("jump", 4)],
+    THROWN:    [("hurt", 4)],
 }
 
 MELEE_TOTAL = MELEE_WINDUP + MELEE_ACTIVE + MELEE_RECOVER
@@ -58,11 +68,17 @@ class Mech:
         self.t = 0                # 状态内计时
         self.anim_t = 0
         self.flash = 0            # 受击白闪剩余帧
+        self._stun_extra = 0      # 受击附加硬直
         self.melee_cd = 0
         self.ranged_cd = 0
+        self.throw_cd = 0
         self.melee_did_hit = False
+        self.throw_hit_done = False
+        self.age = 0              # 总帧数（双击检测用）
+        self._prev_input = {}     # 上一帧输入（新按下检测）
+        self._tap_age = {}        # 方向 -> 上次单按帧号
         self.input = {k: False for k in
-                      ("left", "right", "jump", "block", "melee", "ranged")}
+                      ("left", "right", "jump", "block", "melee", "ranged", "throw")}
 
     # ------------------------------------------------ 辅助量
     @property
@@ -74,6 +90,12 @@ class Mech:
         return self.hp > 0
 
     @property
+    def invuln(self):
+        """后撤步中段为无敌帧（投射物与近战均穿透）。"""
+        return (self.state == BACKSTEP
+                and BACKSTEP_INVULN[0] <= self.t < BACKSTEP_INVULN[1])
+
+    @property
     def palette(self):
         return self.spec["palette"]
 
@@ -82,7 +104,15 @@ class Mech:
         return pygame.Rect(int(self.x) - 11, int(self.y) - 56, 22, 56)
 
     def melee_hitbox(self):
-        """近战判定盒：仅斩击判定相存在。"""
+        """近战判定盒：斩击/空中下劈判定相存在。"""
+        if self.state == AIR_MELEE:
+            if not (AIR_MELEE_ACTIVE[0] <= self.t < AIR_MELEE_ACTIVE[1]):
+                return None
+            f = self.facing
+            x0 = self.x + f * 4
+            x1 = self.x + f * 36
+            left, right = sorted((x0, x1))
+            return pygame.Rect(int(left), int(self.y) - 46, int(right - left), 42)
         if self.state != MELEE:
             return None
         if not (MELEE_WINDUP <= self.t < MELEE_WINDUP + MELEE_ACTIVE):
@@ -99,19 +129,25 @@ class Mech:
 
     # ------------------------------------------------ 主更新
     def update(self, opponent, fx, sfx):
+        self.age += 1
         if self.melee_cd > 0:
             self.melee_cd -= 1
         if self.ranged_cd > 0:
             self.ranged_cd -= 1
+        if self.throw_cd > 0:
+            self.throw_cd -= 1
         if self.flash > 0:
             self.flash -= 1
         self.energy = min(ENERGY_MAX, self.energy + ENERGY_REGEN)
 
         inp = self.input
         st = self.state
+        # 新按下检测（供双击冲刺用），随后快照本帧输入
+        fresh = {k for k, v in inp.items() if v and not self._prev_input.get(k)}
+        self._prev_input = dict(inp)
 
         # 面向对手（动作进行中锁定朝向）
-        if st not in (MELEE, SHOOT, KO):
+        if st not in (MELEE, SHOOT, THROW, DASH, BACKSTEP, AIR_MELEE, THROWN, KO):
             self.facing = 1 if opponent.x >= self.x else -1
 
         if st == KO:
@@ -151,7 +187,96 @@ class Mech:
             self._physics(fx)
             return
 
+        if st == THROWN:                  # 被投出：浮空坠落，落地进硬直
+            self.t += 1
+            self.vx *= 0.99
+            self._physics(fx)
+            if self.grounded:
+                self._enter(HURT)
+                self._stun_extra = THROWN_LAND_STUN
+                fx.dust(self.x, GROUND_Y, n=6)
+                fx.shake(4)
+                sfx.play("hit")
+            return
+
+        if st == THROW:                   # 投技出招（抓取判定在 Fight._combat）
+            self.t += 1
+            self.vx *= 0.8
+            if self.t >= THROW_TOTAL:
+                self.throw_cd = THROW_COOLDOWN
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == DASH:                    # 前冲：第 4 帧起可取消出攻击
+            self.t += 1
+            self.anim_t += 1
+            self.vx = self.facing * DASH_SPEED * max(0.25, 1 - self.t / DASH_FRAMES)
+            if self.t >= 4 and self.grounded:
+                if inp["melee"] and self.melee_cd <= 0:
+                    self._enter(MELEE)
+                    self.melee_did_hit = False
+                    self._physics(fx)
+                    return
+                if inp["throw"] and self.throw_cd <= 0:
+                    self._enter(THROW)
+                    self.throw_hit_done = False
+                    self._physics(fx)
+                    return
+                if (inp["ranged"] and self.ranged_cd <= 0
+                        and self.energy >= RANGED_COST):
+                    self._enter(SHOOT)
+                    self._physics(fx)
+                    return
+            if self.t >= DASH_FRAMES:
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == BACKSTEP:                # 后撤步：中段无敌帧
+            self.t += 1
+            self.anim_t += 1
+            if self.t < 10:
+                self.vx = -self.facing * BACKSTEP_SPEED
+            else:
+                self.vx *= 0.75
+            if self.t >= BACKSTEP_FRAMES:
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == AIR_MELEE:               # 空中下劈
+            self.t += 1
+            if AIR_MELEE_ACTIVE[0] <= self.t < AIR_MELEE_ACTIVE[1]:
+                self.vx = self.facing * 0.4
+            self._physics(fx)
+            if self.grounded:
+                self.melee_cd = MELEE_COOLDOWN
+                fx.dust(self.x, GROUND_Y, n=3)
+                self._enter(IDLE)
+            elif self.t >= AIR_MELEE_TOTAL:
+                self.melee_cd = MELEE_COOLDOWN
+                self._enter(JUMP)
+            return
+
         # ---- 可自由行动：IDLE / WALK / JUMP / BLOCK ----
+        # 双击方向 → 前冲 / 后撤步（仅地面自由态）
+        if (self.grounded and st in (IDLE, WALK)
+                and (("left" in fresh) ^ ("right" in fresh))):
+            dirn = -1 if "left" in fresh else 1
+            last = self._tap_age.get(dirn)
+            if last is not None and self.age - last <= TAP_WINDOW:
+                self._tap_age[dirn] = None
+                forward = 1 if opponent.x >= self.x else -1
+                if dirn == forward:
+                    self._enter(DASH)
+                else:
+                    self._enter(BACKSTEP)
+                fx.dust(self.x, self.y, n=4)
+                self._physics(fx)
+                return
+            self._tap_age[dirn] = self.age
+
         if inp["block"] and self.grounded:
             if st != BLOCK:
                 self._enter(BLOCK)
@@ -159,6 +284,9 @@ class Mech:
         elif inp["melee"] and self.grounded and self.melee_cd <= 0:
             self._enter(MELEE)
             self.melee_did_hit = False
+        elif inp["throw"] and self.grounded and self.throw_cd <= 0:
+            self._enter(THROW)
+            self.throw_hit_done = False
         elif (inp["ranged"] and self.grounded and self.ranged_cd <= 0
               and self.energy >= RANGED_COST):
             self._enter(SHOOT)
@@ -184,7 +312,10 @@ class Mech:
         else:
             # 空中
             self.anim_t += 1
-            if inp["left"]:
+            if inp["melee"] and self.melee_cd <= 0:
+                self._enter(AIR_MELEE)          # 空中下劈
+                self.melee_did_hit = False
+            elif inp["left"]:
                 self.vx = max(self.vx - 0.12, -self.spec["walk_speed"])
             elif inp["right"]:
                 self.vx = min(self.vx + 0.12, self.spec["walk_speed"])
@@ -219,12 +350,20 @@ class Mech:
         self.flash = max(self.flash, 0)  # 射击不闪白
         sfx.play("shoot")
 
-    def take_damage(self, dmg, from_dir, fx, sfx, heavy=False):
-        """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'ko' / None。"""
+    def take_damage(self, dmg, from_dir, fx, sfx, heavy=False,
+                    unblockable=False, launch=False):
+        """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'ko' / None。
+
+        unblockable: 无视格挡（投技）；launch: 击飞浮空（被投）；
+        无敌帧期间直接返回 None（攻击穿透，不消耗攻击方判定）。
+        """
         if not self.alive:
             return None
-        if self.state == BLOCK:
-            real = max(1, round(dmg * BLOCK_REDUCE))
+        if self.invuln:
+            return None
+
+        if self.state == BLOCK and not unblockable:
+            real = max(1, round(dmg * BLOCK_REDUCE))     # 格挡削血（chip）
             self.hp = max(0, self.hp - real)
             self.vx = from_dir * 1.3
             fx.block_spark(self.x + self.facing * 14, self.y - 34)
@@ -246,12 +385,18 @@ class Mech:
             self.vx = from_dir * 2.4
             fx.ko_burst(self.x, self.y - 30)
             return "ko"
+        if launch:                       # 被投飞：浮空坠落
+            self.state = THROWN
+            self.t = 0
+            self._stun_extra = 0
+            self.vy = THROW_VY
+            self.vx = from_dir * THROW_VX
+            fx.throw_impact(self.x, self.y - 30)
+            return "hit"
         self.state = HURT
         self.t = 0
         self._stun_extra = 6 if heavy else 0
         return "hit"
-
-    _stun_extra = 0
 
     # ------------------------------------------------ 绘制
     def current_frame_name(self):
@@ -262,6 +407,14 @@ class Mech:
             if self.t < MELEE_WINDUP + MELEE_ACTIVE:
                 return "atk1"
             return "atk2"
+        if st == THROW:
+            if self.t < THROW_HIT_T:
+                return "atk0"
+            if self.t < THROW_HIT_T + 10:
+                return "atk1"
+            return "atk2"
+        if st == AIR_MELEE:
+            return "atk1" if self.t < AIR_MELEE_ACTIVE[1] else "atk2"
         if st == SHOOT:
             return "shoot"
         seq = ANIMS[st]

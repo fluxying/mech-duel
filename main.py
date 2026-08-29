@@ -13,7 +13,9 @@ import pygame
 from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       P1_KEYS, P2_KEYS, ROUND_TIME, ROUNDS_TO_WIN,
                       KO_SLOW_FRAMES, HITSTOP_FRAMES, MIN_SEPARATION,
-                      ARENA_LEFT, ARENA_RIGHT)
+                      ARENA_LEFT, ARENA_RIGHT, GROUND_Y, BLOCK_REDUCE,
+                      MELEE_WINDUP, THROW_HIT_T, THROW_RANGE,
+                      AIR_MELEE_ACTIVE, AIR_MELEE_MULT, RANGED_DAMAGE)
 from assets import build_mech_frames, build_background, get_font
 from mech import Mech
 from effects import Fx
@@ -166,6 +168,8 @@ class Fight:
         for m in (self.p1, self.p2):
             if m.state == "melee" and m.t == MELEE_WINDUP:
                 self.fx.slash(m)
+            elif m.state == "air_melee" and m.t == AIR_MELEE_ACTIVE[0]:
+                self.fx.slash(m)
 
     def _separate(self):
         a, b = self.p1, self.p2
@@ -181,15 +185,35 @@ class Fight:
             b.x = max(ARENA_LEFT, min(ARENA_RIGHT, b.x + s * push))
 
     def _combat(self):
+        # 投技判定：THROW_HIT_T 帧抓取范围内地面目标，无视格挡（破防手段）
+        for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
+            if (atk.state == "throw" and atk.t == THROW_HIT_T
+                    and not atk.throw_hit_done):
+                atk.throw_hit_done = True
+                if (dfn.grounded and dfn.state not in ("thrown", "hurt", "ko")
+                        and not dfn.invuln
+                        and abs(dfn.x - atk.x) <= THROW_RANGE):
+                    res = dfn.take_damage(atk.spec["throw_damage"], atk.facing,
+                                          self.fx, self.sfx,
+                                          heavy=True, unblockable=True, launch=True)
+                    if res == "hit":
+                        self.hitstop = HITSTOP_FRAMES + 3
+                    elif res == "ko":
+                        self._on_ko()
         # 近战判定
         for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
             hb = atk.melee_hitbox()
             if hb is None or atk.melee_did_hit:
                 continue
             if hb.colliderect(dfn.body_rect()):
-                atk.melee_did_hit = True
-                res = dfn.take_damage(atk.spec["melee_damage"], atk.facing,
+                dmg = atk.spec["melee_damage"]
+                if atk.state == "air_melee":
+                    dmg = max(1, round(dmg * AIR_MELEE_MULT))
+                res = dfn.take_damage(dmg, atk.facing,
                                       self.fx, self.sfx, heavy=True)
+                if res is None:            # 对方无敌帧：判定不消耗，攻击穿透
+                    continue
+                atk.melee_did_hit = True
                 if res == "hit":
                     self.hitstop = HITSTOP_FRAMES
                 elif res == "ko":
@@ -200,10 +224,12 @@ class Fight:
             if bolt.dead or target.state == "ko":
                 continue
             if bolt.rect().colliderect(target.body_rect()):
-                bolt.dead = True
                 direction = 1 if bolt.vx > 0 else -1
                 res = target.take_damage(bolt.dmg, direction,
                                          self.fx, self.sfx, heavy=False)
+                if res is None:            # 无敌帧：光束穿透不消失
+                    continue
+                bolt.dead = True
                 if res == "ko":
                     self._on_ko()
 
@@ -441,6 +467,74 @@ def selftest():
     f5.step(None)
     assert f5.phase == "round_end" and f5.wins[1] == 1
     print("[5] 超时判负: OK")
+
+    # 6) 投技：无视格挡 + 浮空落地硬直
+    f6 = Fight("2p", frames, bg, sfx)
+    f6.phase = ACTIVE
+    f6.p1.x, f6.p2.x = 200, 232
+    f6.p2.state = "block"
+    hp0 = f6.p2.hp
+    keys = FakeKeys({pygame.K_l: True, pygame.K_DOWN: True})  # P1投技 / P2格挡
+    for _ in range(THROW_HIT_T + 2):
+        f6.step(keys)
+    assert f6.p2.hp == hp0 - f6.p1.spec["throw_damage"], "投技未无视格挡"
+    assert f6.p2.state == "thrown", f"被投后状态异常: {f6.p2.state}"
+    for _ in range(150):                      # 浮空 → 落地硬直 → 恢复
+        f6.step(keys)
+        if f6.p2.state == "idle":
+            break
+    assert f6.p2.state == "idle", "被投后未恢复正常"
+    print("[6] 投技破防 + 浮空落地硬直: OK")
+
+    # 7) 格挡削血（chip）：格挡仍掉血，但远低于裸吃
+    f7 = Fight("2p", frames, bg, sfx)
+    f7.p2.state = "block"
+    hp0 = f7.p2.hp
+    res = f7.p2.take_damage(RANGED_DAMAGE, 1, f7.fx, sfx)
+    chip = max(1, round(RANGED_DAMAGE * BLOCK_REDUCE))
+    assert res == "blocked" and f7.p2.hp == hp0 - chip, "格挡削血数值不符"
+    print("[7] 格挡削血 chip: OK")
+
+    # 8) 空中下劈：空中按近战进入 air_melee 并命中地面目标
+    f8 = Fight("2p", frames, bg, sfx)
+    f8.phase = ACTIVE
+    f8.p1.x, f8.p2.x = 200, 220
+    f8.p1.y = GROUND_Y - 40
+    f8.p1.vy = 0
+    f8.p1.state = "jump"
+    keys = FakeKeys({pygame.K_j: True})
+    f8.step(keys)
+    assert f8.p1.state == "air_melee", f"未进入空中攻击: {f8.p1.state}"
+    for _ in range(10):
+        f8.step(keys)
+        if f8.p2.hp < f8.p2.max_hp:
+            break
+    dmg = max(1, round(f8.p1.spec["melee_damage"] * AIR_MELEE_MULT))
+    assert f8.p2.hp == f8.p2.max_hp - dmg, "空中下劈未造成预期伤害"
+    print("[8] 空中下劈: OK")
+
+    # 9) 后撤步无敌帧 + 双击方向触发冲刺/后撤
+    f9 = Fight("2p", frames, bg, sfx)
+    f9.p1.state = "backstep"
+    f9.p1.t = 6
+    hp0 = f9.p1.hp
+    assert f9.p1.invuln, "后撤步无敌窗口判定失败"
+    assert f9.p1.take_damage(10, 1, f9.fx, sfx) is None, "无敌帧未免疫伤害"
+    assert f9.p1.hp == hp0
+    f9b = Fight("2p", frames, bg, sfx)
+    f9b.phase = ACTIVE
+    f9b.p1.x, f9b.p2.x = 200, 260
+    for ks in ({pygame.K_a: True}, {pygame.K_a: True}, {}, {}, {pygame.K_a: True}):
+        f9b.step(FakeKeys(ks))
+    assert f9b.p1.state == "backstep", f"双击后方未触发后撤步: {f9b.p1.state}"
+    f9c = Fight("2p", frames, bg, sfx)
+    f9c.phase = ACTIVE
+    f9c.p1.x, f9c.p2.x = 200, 260
+    for ks in ({pygame.K_d: True}, {pygame.K_d: True}, {}, {}, {pygame.K_d: True}):
+        f9c.step(FakeKeys(ks))
+    assert f9c.p1.state == "dash", f"双击前方未触发前冲: {f9c.p1.state}"
+    assert f9c.p1.x > 200, "前冲未产生位移"
+    print("[9] 后撤步无敌 + 双击冲刺/后撤: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

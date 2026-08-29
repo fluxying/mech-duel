@@ -10,8 +10,8 @@ import random
 
 RNG = random.Random(77)
 
-PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT = (
-    "move", "retreat", "melee", "shoot", "block", "jump", "wait")
+PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT, PLAN_THROW = (
+    "move", "retreat", "melee", "shoot", "block", "jump", "wait", "throw")
 
 
 class AIController:
@@ -49,6 +49,14 @@ class AIController:
             if incoming and RNG.random() < 0.05:
                 self._set_plan(RNG.choice([PLAN_JUMP, PLAN_BLOCK]),
                                RNG.randint(12, 24))
+            # 对手防御站桩 → 抓投破防
+            if (o.state == "block" and dist < 44 and m.throw_cd <= 0
+                    and RNG.random() < 0.06):
+                self._set_plan(PLAN_THROW, 6)
+            # 对手投技起手 → 跳起拆投（投技只抓地面目标）
+            if (o.state == "throw" and o.t < 8 and dist < 50
+                    and RNG.random() < 0.06):
+                self._set_plan(PLAN_JUMP, 8)
 
         # ---- 决策 ----
         self.decide_t -= 1
@@ -81,7 +89,9 @@ class AIController:
             else:
                 self._set_plan(PLAN_WAIT, RNG.randint(8, 16))
         else:  # 近身
-            if m.melee_cd <= 0 and r < 0.5:
+            if o.state == "block" and m.throw_cd <= 0 and r < 0.6:
+                self._set_plan(PLAN_THROW, 6)      # 对面站桩防御就抓投
+            elif m.melee_cd <= 0 and r < 0.5:
                 self._set_plan(PLAN_MELEE, 6)
             elif r < 0.65:
                 self._set_plan(PLAN_BLOCK, RNG.randint(12, 24))
@@ -124,6 +134,8 @@ class AIController:
                 inp["melee"] = True
         elif self.plan == PLAN_SHOOT:
             inp["ranged"] = True
+        elif self.plan == PLAN_THROW:
+            inp["throw"] = True
         elif self.plan == PLAN_BLOCK:
             inp["block"] = True
         elif self.plan == PLAN_JUMP:

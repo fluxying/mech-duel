@@ -219,6 +219,12 @@ class Fx:
     def slash(self, mech):
         self.slashes.append(Slash(mech))
 
+    def throw_impact(self, x, y):
+        """投技命中：重火花 + 落地尘 + 大震动。"""
+        self.sparks(x, y, 1, hot=True, n=14)
+        self.dust(x, y + 26, n=6)
+        self.shake(5)
+
     def shake(self, mag):
         self.shake_mag = max(self.shake_mag, mag)
 
