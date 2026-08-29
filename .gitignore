@@ -1,2 +1,6 @@
 *.pyc
-/.zcode
+/.zcode/
+/build/
+/dist/
+*.spec
+/.workbuddy/
