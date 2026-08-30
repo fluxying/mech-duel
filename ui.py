@@ -198,7 +198,8 @@ def banner(surf, text, sub=None, pulse=False):
 DIFF_CN = {"easy": "简单", "normal": "普通", "hard": "困难"}
 
 
-def draw_menu(surf, bg, frames, t, difficulty="normal"):
+def draw_menu(surf, bg, frames, t, difficulty="normal",
+              stage_name="废墟月夜", stats=None):
     surf.blit(bg, (0, 0))
     # 三机甲登场姿势（贴两侧与底部，避免与说明文字重叠）
     idle_p1 = frames["p1"]["idle"][1]
@@ -227,6 +228,7 @@ def draw_menu(surf, bg, frames, t, difficulty="normal"):
         ("[3] 训练模式    FREE TRAINING", (230, 230, 240)),
         ("[4] AI 演示     CPU  VS  CPU", (230, 230, 240)),
         ("[5] 按键设置    KEY CONFIG", (230, 230, 240)),
+        (f"[E] 场地　{stage_name}", (150, 220, 170)),
     ]
     y0 = 100
     for i, (txt, col) in enumerate(rows):
@@ -234,10 +236,20 @@ def draw_menu(surf, bg, frames, t, difficulty="normal"):
         surf.blit(img, (cx - img.get_width() // 2, y0 + i * 16))
     blink = (t // 30) % 2 == 0
     if blink:
-        hint = fnt_opt.render("按 1-5 选择 · TAB 切换 AI 难度 · M 静音",
+        hint = fnt_opt.render("按 1-4 选择 · E 切换场地 · TAB 难度 · M 静音",
                               True, (255, 214, 100))
-        surf.blit(hint, (cx - hint.get_width() // 2, y0 + 5 * 16 + 4))
+        surf.blit(hint, (cx - hint.get_width() // 2, y0 + 6 * 16 + 4))
 
+    if stats and stats.get("matches"):
+        fnt_s = get_font(9)
+        top = max(stats["wins"].items(), key=lambda kv: kv[1])             if stats["wins"] else None
+        line = f"战绩 {stats['matches']} 场"
+        if top and top[1]:
+            from settings import MECH_SPECS
+            cn = MECH_SPECS[top[0]]["cn_name"] if top[0] in MECH_SPECS else top[0]
+            line += f" · 常胜 {cn}×{top[1]}"
+        img = fnt_s.render(line, True, (170, 220, 190))
+        surf.blit(img, (INTERNAL_W - img.get_width() - 6, 4))
     fnt_help = get_font(9)
     h1 = fnt_help.render(
         "P1  A/D 移动  W 跳  S 防  J 斩  K 束  L 投  I 超杀(槽满)  双击方向 冲刺/后撤",
@@ -245,14 +257,14 @@ def draw_menu(surf, bg, frames, t, difficulty="normal"):
     h2 = fnt_help.render(
         "P2  ←/→ 移动  ↑ 跳  ↓ 防  小键盘1 斩 2 束 3 投 4 超杀(可在[5]改键)",
         True, (150, 180, 230))
-    surf.blit(h1, (cx - h1.get_width() // 2, 212))
-    surf.blit(h2, (cx - h2.get_width() // 2, 226))
+    surf.blit(h1, (cx - h1.get_width() // 2, 214))
+    surf.blit(h2, (cx - h2.get_width() // 2, 228))
     h4 = fnt_help.render("空中可斩击 · 投技无视防御 · 落地按跳/防 受身 · 训练: F1 判定框 F2 假人格挡",
                          True, (170, 220, 255))
-    surf.blit(h4, (cx - h4.get_width() // 2, 240))
+    surf.blit(h4, (cx - h4.get_width() // 2, 242))
     h3 = fnt_help.render("三局两胜 · 每局 60 秒 · R 重开  ESC 菜单",
                          True, (170, 170, 190))
-    surf.blit(h3, (cx - h3.get_width() // 2, 254))
+    surf.blit(h3, (cx - h3.get_width() // 2, 256))
 
 
 def draw_select(surf, bg, frames, sel, t):
@@ -371,7 +383,7 @@ def draw_keyconfig(surf, bg, rows, idx, waiting, t):
     surf.blit(note, (cx - note.get_width() // 2, 244))
 
 
-def draw_victory(surf, bg, winner_spec, wins1, wins2):
+def draw_victory(surf, bg, winner_spec, wins1, wins2, has_replay=False):
     surf.blit(bg, (0, 0))
     fnt = get_font(24)
     text = f"{winner_spec['name']} {winner_spec['cn_name']} WINS!"
@@ -386,5 +398,7 @@ def draw_victory(surf, bg, winner_spec, wins1, wins2):
     blink = (pygame.time.get_ticks() // 400) % 2 == 0
     if blink:
         fnt3 = get_font(11)
-        tip = fnt3.render("R 再来一局    ESC 返回菜单", True, (230, 230, 240))
+        tip = fnt3.render("R 再来一局    ESC 返回菜单" +
+                          ("    V 回放本局" if has_replay else ""),
+                          True, (230, 230, 240))
         surf.blit(tip, (cx - tip.get_width() // 2, 160))

@@ -33,7 +33,7 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       PUNISH_MULT, COMBO_RESET_FRAMES, COMBO_SCALE_MIN,
                       DRIVE_MAX, DRIVE_HIT_GAIN, DRIVE_PARRY_GAIN,
                       PARRY_STAGGER, DIM_DMG, WALL_SPLASH_STUN, SUPER_COST,
-                      DIM_GUARD_MULT)
+                      DIM_GUARD_MULT, STAGE_ORDER, STAGES, STATS_FILE)
 from assets import (build_mech_frames, build_background, get_font,
                     SPRITE_W, SPRITE_H, ANCHOR_FX, PIX)
 from mech import Mech, IDLE
@@ -169,6 +169,30 @@ class QuietFx(Fx):
         pass
 
 
+def load_stats():
+    """战绩存档：{matches, wins{机甲:数}, picks{机甲:数}}。损坏即重置。"""
+    import json
+    try:
+        with open(STATS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and "matches" in d:
+            d.setdefault("wins", {})
+            d.setdefault("picks", {})
+            return d
+    except Exception:
+        pass
+    return {"matches": 0, "wins": {}, "picks": {}}
+
+
+def save_stats(stats):
+    import json
+    try:
+        with open(STATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def _seeded_rng(seed):
     return random.Random(seed) if seed is not None else random.Random()
 
@@ -183,7 +207,8 @@ class Fight:
     """一场三局两胜对战：回合状态机 + 判定 + 特效编排。"""
 
     def __init__(self, mode, frames, bg, sfx, m1="garnet", m2="azure",
-                 difficulty="normal", seed=None, quiet=False, pads=None):
+                 difficulty="normal", seed=None, quiet=False, pads=None,
+                 record_script=False, scripted=None):
         self.mode = mode          # "2p" | "ai" | "cpu" | "demo" | "training"
         self.training = mode == "training"
         self.difficulty = difficulty
@@ -218,6 +243,11 @@ class Fight:
         # KO 高光回放：ACTIVE 期间滚动快照
         self.replay = collections.deque(maxlen=REPLAY_FRAMES)
         self.replay_i = 0
+        # 对局录像（输入序列，虚拟输入同构：AI 与真人同一记录路径）
+        self.script = [] if record_script else None
+        self.scripted = scripted   # 回放模式：逐帧注入录像输入
+        self.script_i = 0
+        self.playback_done = False
         # 训练模式开关
         self.show_hitboxes = False
         self.dummy_block = False
@@ -250,6 +280,9 @@ class Fight:
         self.round_no = 1
         self.match_winner = None
         self.hud.reset()
+        if self.script is not None:
+            self.script.clear()    # 重开后旧录像失效
+        self.script_i = 0
         self.reset_round()
 
     # -------------------------------------------------- 输入
@@ -265,6 +298,17 @@ class Fight:
                 continue
             for act, code in keymap.items():
                 m.input[act] = bool(keys[code])
+        if self.scripted is not None:       # 回放：注入录像输入
+            if self.script_i < len(self.scripted):
+                a, b = self.scripted[self.script_i]
+                for k in self.p1.input:
+                    self.p1.input[k] = k in a
+                for k in self.p2.input:
+                    self.p2.input[k] = k in b
+            else:
+                self.playback_done = True
+            self.script_i += 1
+            return
         if self.ai1:
             self.ai1.observe_bolts(self.fx.bolts)
         if self.ai2:
@@ -300,6 +344,10 @@ class Fight:
             self._read_inputs(keys)
             if self.training and self.dummy_block:
                 self.p2.input["block"] = True   # 训练假人：自动格挡
+            if self.script is not None:         # 录制本帧双方输入
+                self.script.append((
+                    frozenset(k for k, v in self.p1.input.items() if v),
+                    frozenset(k for k, v in self.p2.input.items() if v)))
             self.p1.update(self.p2, self.fx, self.sfx)
             self.p2.update(self.p1, self.fx, self.sfx)
             if self.training:                # 输入历史记录
@@ -654,6 +702,9 @@ class Fight:
             banner(frame, self.banner_text, sub=self.banner_sub)
         if self.training:
             self._training_overlay(frame)
+        if self.scripted is not None:      # 整局回放标识
+            img = get_font(10).render("▶ 对局回放", True, (120, 230, 255))
+            frame.blit(img, (10, 28))
 
     def _draw_hitboxes(self, w):
         """训练模式判定框：红=近战 绿=超必杀 蓝=本体 黄=弹幕。"""
@@ -849,8 +900,10 @@ def run_window():
     clock = pygame.time.Clock()
 
     load_keymap()                  # 启动读取重映射键位（keymap.json）
+    stats = load_stats()           # 战绩存档
     frames = build_mech_frames()
-    bg = build_background()
+    stage_i = 0
+    bg = build_background(theme=STAGE_ORDER[stage_i])
     sfx = Sfx()
     pads = PadMap()                # 手柄：1号→P1 2号→P2，即插即用无需配置
     scanlines = build_scanlines()
@@ -863,7 +916,8 @@ def run_window():
     kc = None                              # 按键设置界面状态
     if demo:
         fight = Fight("demo", frames, bg, sfx, difficulty=difficulty,
-                      pads=pads)
+                      pads=pads, record_script=True)
+    victory_fight = None                   # 回放前的结算局引用
     menu_t = 0
     victory_t = 0
     demo_i = 0                             # 演示轮换计数（demo_pair）
@@ -879,7 +933,8 @@ def run_window():
             kc = KeyConfigState()
             scene = KEYCONFIG
         elif smoke_scene == "training":
-            fight = Fight("training", frames, bg, sfx, pads=pads)
+            fight = Fight("training", frames, bg, sfx, pads=pads,
+                      record_script=True)
     frame_i = 0
 
     while running:
@@ -913,7 +968,8 @@ def run_window():
                         sfx.play("menu")
                     elif ev.key == pygame.K_4:
                         fight = Fight("demo", frames, bg, sfx,
-                                      difficulty=difficulty, pads=pads)
+                                      difficulty=difficulty, pads=pads,
+                                      record_script=True)
                         scene = FIGHT
                         sfx.play("menu")
                     elif ev.key == pygame.K_5:
@@ -924,6 +980,10 @@ def run_window():
                         difficulty = AI_LEVELS[
                             (AI_LEVELS.index(difficulty) + 1) % len(AI_LEVELS)]
                         sfx.play("menu")
+                    elif ev.key == pygame.K_e:     # 场地轮换
+                        stage_i = (stage_i + 1) % len(STAGE_ORDER)
+                        bg = build_background(theme=STAGE_ORDER[stage_i])
+                        sfx.play("menu")
                 elif scene == SELECT and sel is not None:
                     act, payload = sel.handle(ev.key)
                     if act == "back":
@@ -933,7 +993,8 @@ def run_window():
                         mode = ("2p" if sel.mode == "2p"
                                 else "ai" if sel.mode == "ai" else "training")
                         fight = Fight(mode, frames, bg, sfx, m1=m1, m2=m2,
-                                      difficulty=difficulty, pads=pads)
+                                      difficulty=difficulty, pads=pads,
+                                      record_script=True)
                         scene, sel = FIGHT, None
                         sfx.play("menu")
                 elif scene == FIGHT and fight is not None:
@@ -947,6 +1008,15 @@ def run_window():
                         fight.show_hitboxes = not fight.show_hitboxes
                     elif fight.training and ev.key == pygame.K_F2:
                         fight.dummy_block = not fight.dummy_block
+                elif scene == VICTORY and ev.key == pygame.K_v:
+                    if fight is not None and fight.script and not demo:
+                        victory_fight = fight           # 整局回放
+                        fight = Fight("2p", frames, bg, sfx,
+                                      m1=fight.p1.spec_key,
+                                      m2=fight.p2.spec_key,
+                                      scripted=fight.script, pads=pads)
+                        scene = FIGHT
+                        sfx.play("menu")
                 elif scene == VICTORY and ev.key == pygame.K_r:
                     if fight:
                         fight.restart_match()
@@ -962,7 +1032,8 @@ def run_window():
         frame = pygame.Surface((INTERNAL_W, INTERNAL_H))
         if scene == MENU:
             menu_t += 1
-            draw_menu(frame, bg, frames, menu_t, difficulty)
+            draw_menu(frame, bg, frames, menu_t, difficulty,
+                      STAGES[STAGE_ORDER[stage_i]]["name"], stats)
         elif scene == SELECT and sel is not None:
             menu_t += 1
             draw_select(frame, bg, frames, sel, menu_t)
@@ -974,14 +1045,26 @@ def run_window():
                            pads.poll([P1_KEYS, P2_KEYS]))
             fight.step(inp)
             fight.render(frame)
-            if fight.match_winner:
+            if fight.playback_done and fight.phase == ROUND_END:
+                fight, scene = victory_fight, VICTORY   # 回放结束回结算页
+                victory_t = 0
+            elif fight.match_winner:
+                if (not demo and fight.mode != "training"
+                        and not fight.scripted):        # 回放不重复记战绩
+                    stats["matches"] += 1
+                    wname = fight.match_winner.spec_key
+                    stats["wins"][wname] = stats["wins"].get(wname, 0) + 1
+                    for p in (fight.p1, fight.p2):
+                        stats["picks"][p.spec_key] =                             stats["picks"].get(p.spec_key, 0) + 1
+                    save_stats(stats)
                 scene = VICTORY
                 victory_t = 0
                 sfx.play("win")
         else:  # VICTORY
             victory_t += 1
             draw_victory(frame, bg, fight.match_winner.spec,
-                         fight.wins[0], fight.wins[1])
+                         fight.wins[0], fight.wins[1],
+                         has_replay=bool(fight.script) and not demo)
             if demo and victory_t > FPS * 6:   # 演示模式：轮换机体与难度再来一局
                 demo_i += 1
                 m1, m2, diff = demo_pair(demo_i)
@@ -1488,7 +1571,8 @@ def selftest():
     f23b.p2.t = MELEE_WINDUP + MELEE_ACTIVE + 1
     hp0 = f23b.p2.hp
     f23b.step(FakeKeys({}))
-    assert hp0 - f23b.p2.hp == max(1, round(12 * PUNISH_MULT)), \
+    assert hp0 - f23b.p2.hp == max(1, round(
+        f23b.p1.spec["melee_damage"] * PUNISH_MULT)), \
         f"惩罚反击倍率不符: {hp0 - f23b.p2.hp}"
     assert f23b.p2.state == "thrown", f"惩罚反击未强制击倒: {f23b.p2.state}"
     f23c = Fight("2p", frames, bg, sfx)    # 对照：判定相中命中 → 无惩罚加成
@@ -1501,7 +1585,7 @@ def selftest():
     f23c.p2.t = MELEE_WINDUP + 1
     hp0 = f23c.p2.hp
     f23c.step(FakeKeys({}))
-    assert hp0 - f23c.p2.hp == 12, "非惩罚命中不应有加成"
+    assert hp0 - f23c.p2.hp == f23c.p1.spec["melee_damage"],         "非惩罚命中不应有加成"
     assert f23c.p2.state == "hurt", "非惩罚命中不应击倒"
     print("[23] 受防硬直 + 惩罚反击: OK")
 
@@ -1782,6 +1866,95 @@ def selftest():
             f29c.fx.bolts.clear()
     assert shot_frames >= 6, f"苍穹风暴连射数不足: {shot_frames}"
     print("[29] 三层超必杀: OK")
+
+    # 30) 分对阵平衡矩阵：9 对阵各自胜率（正反场各半），35%-65% 带外报警
+    K = max(6, int(os.environ.get("MECHDUEL_MATRIX_K", "20")))
+    matrix = {}
+    for a in MECH_ORDER:
+        for b in MECH_ORDER:
+            w = [0, 0]
+            for k in range(2 * K):
+                m1, m2 = (a, b) if k % 2 == 0 else (b, a)
+                fb = Fight("cpu", frames, bg, sfx, m1=m1, m2=m2, quiet=True)
+                fb.ai1 = AIController(fb.p1, fb.p2, "normal",
+                                      random.Random(9000 + k))
+                fb.ai2 = AIController(fb.p2, fb.p1, "normal",
+                                      random.Random(9500 + k))
+                g2 = ROUND_TIME * 60 * 12
+                while fb.match_winner is None and fb.round_no < 9 and g2 > 0:
+                    fb.step(None)
+                    g2 -= 1
+                if fb.match_winner is fb.p1:
+                    win_mech, win_side = m1, 0
+                elif fb.match_winner is fb.p2:
+                    win_mech, win_side = m2, 1
+                elif fb.wins[0] != fb.wins[1]:
+                    i2 = 0 if fb.wins[0] > fb.wins[1] else 1
+                    win_mech, win_side = (m1, m2)[i2], i2
+                else:
+                    win_mech, win_side = None, None   # 平局不计
+                if win_side is None:
+                    continue
+                if a == b:
+                    w[win_side] += 1         # 镜像：按先后手计
+                elif win_mech == a:
+                    w[0] += 1
+                else:
+                    w[1] += 1
+            matrix[(a, b)] = w
+    print(f"[30] 分对阵平衡矩阵（每对阵 {2 * K} 局；非镜像=左侧机体胜率，镜像=左/P1 侧胜率）:")
+    for a in MECH_ORDER:
+        cells = []
+        for b in MECH_ORDER:
+            w = matrix[(a, b)]
+            decided = w[0] + w[1]
+            cells.append(f"{b}:{(w[1] * 100 // decided if decided else 50):>3}%")
+        print(f"    {a:>8} | " + "  ".join(cells))
+    alarms = []
+    for (a, b), w in matrix.items():
+        decided = w[0] + w[1]
+        if a == b or not decided:
+            continue
+        rate = w[0] / decided                   # a 的视角
+        if not 0.35 <= rate <= 0.65:
+            alarms.append(f"{a} vs {b}: {rate:.0%}")
+    if alarms:
+        print("    ⚠ 警告：对阵失衡（超出 35%-65%）" + " / ".join(alarms))
+    assert sum(w[0] + w[1] for w in matrix.values()) > 18 * K * 9 // 10,         "矩阵存在大量未决局"
+    print("[30] 分对阵平衡矩阵: OK")
+
+    # 31) 完整对局录像：input 序列回放与原局状态逐点一致
+    f31 = Fight("cpu", frames, bg, sfx, m1="garnet", m2="azure", seed=77,
+                quiet=True, record_script=True)
+    f31.ai1 = AIController(f31.p1, f31.p2, "normal", random.Random(501))
+    f31.ai2 = AIController(f31.p2, f31.p1, "normal", random.Random(502))
+    snaps = []
+    guard = ROUND_TIME * 60 * 12
+    while f31.match_winner is None and guard > 0:
+        f31.step(None)
+        if f31.t % 300 == 0:
+            snaps.append((round(f31.p1.hp), round(f31.p2.hp),
+                          round(f31.p1.x, 2), round(f31.p2.x, 2),
+                          f31.wins[0], f31.wins[1], f31.round_no))
+        guard -= 1
+    assert f31.match_winner is not None and len(f31.script) > 200,         "原局未完成或录像过短"
+    f31r = Fight("2p", frames, bg, sfx, m1="garnet", m2="azure",
+                 quiet=True, scripted=f31.script)
+    snaps2 = []
+    guard = ROUND_TIME * 60 * 12
+    while not f31r.playback_done and f31r.match_winner is None and guard > 0:
+        f31r.step(None)
+        if f31r.t % 300 == 0:
+            snaps2.append((round(f31r.p1.hp), round(f31r.p2.hp),
+                           round(f31r.p1.x, 2), round(f31r.p2.x, 2),
+                           f31r.wins[0], f31r.wins[1], f31r.round_no))
+        guard -= 1
+    assert snaps2 == snaps,         f"回放状态不一致（{sum(1 for a, b in zip(snaps, snaps2) if a != b)} 处）"
+    assert (f31r.wins[0], f31r.wins[1]) == (f31.wins[0], f31.wins[1])
+    assert f31r.match_winner is not None and         f31r.match_winner.spec_key == f31.match_winner.spec_key
+    assert f31r.round_no == f31.round_no
+    print(f"[31] 对局录像回放一致（{len(f31.script)} 帧输入, "
+          f"{len(snaps)} 个状态采样点）: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

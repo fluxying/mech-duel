@@ -90,11 +90,11 @@ MECH_SPECS = {
         "name": "GARNET",
         "cn_name": "红莲",
         "palette": "p1",
-        "hp": 120,
+        "hp": 106,
         "walk_speed": 1.35,      # px / frame
         "jump_power": 6.0,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
         "air_jumps": 0,
-        "melee_damage": 12,
+        "melee_damage": 10,
         "melee_range": 40,       # 判定盒前端离中心的距离
         "knockback": 3.6,
         "bolt_color": "hot",     # 光束弹配色（红橙）
@@ -113,11 +113,11 @@ MECH_SPECS = {
         "name": "AZURE",
         "cn_name": "苍鳍",
         "palette": "p2",
-        "hp": 100,
+        "hp": 105,
         "walk_speed": 1.7,
         "jump_power": 6.3,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
         "air_jumps": 0,
-        "melee_damage": 9,
+        "melee_damage": 10,
         "melee_range": 40,
         "knockback": 3.2,
         "bolt_color": "cool",    # 光束弹配色（青蓝）
@@ -135,11 +135,11 @@ MECH_SPECS = {
         "name": "VERDANT",
         "cn_name": "翠岚",
         "palette": "p3",
-        "hp": 110,
+        "hp": 118,
         "walk_speed": 1.55,
         "jump_power": 6.6,       # 全场最高跳跃
         "air_jumps": 1,          # 专属机动：空中二段跳
-        "melee_damage": 10,
+        "melee_damage": 12,
         "melee_range": 40,
         "knockback": 3.4,
         "bolt_color": "acid",    # 光束弹配色（酸绿）
@@ -255,11 +255,11 @@ def combo_scale(count):
 SPECIAL_CD = 30                  # 特殊技结束后的射击系共享冷却
 MOVE_DEFS = {
     "garnet": {
-        "heavy":      {"name": "重击",     "windup": 14, "active": 5,  "recover": 20, "dmg": 22, "range": 44, "launch": True},
-        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 28, "range": 48, "guard_mult": 1.5, "lunge": 1.2},
+        "heavy":      {"name": "重击",     "windup": 14, "active": 5,  "recover": 20, "dmg": 18, "range": 44, "launch": True},
+        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 22, "range": 48, "guard_mult": 1.5, "lunge": 1.2},
         "back_heavy": {"name": "横扫",     "windup": 15, "active": 6,  "recover": 22, "dmg": 18, "range": 46, "launch": True},
         "air_heavy":  {"name": "踏压",     "windup": 8,  "active": 8,  "recover": 8,  "dmg": 15, "range": 36, "launch": True},
-        "dash_light": {"name": "装甲冲撞", "windup": 12, "active": 8,  "recover": 22, "dmg": 16, "range": 40, "armor": True, "launch": True, "rush": 3.2},
+        "dash_light": {"name": "装甲冲撞", "windup": 12, "active": 8,  "recover": 22, "dmg": 13, "range": 40, "armor": True, "launch": True, "rush": 3.2},
         "fwd_bolt":   {"name": "熔核喷发", "windup": 10, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.2, "dist": 90}},
         "od":         {"name": "熔核喷发EX", "windup": 8, "active": 6, "recover": 18, "dmg": 14, "bolt": {"speed": 3.4, "dist": 140, "shots": 2, "interval": 6}},
         "back_bolt":  None,
@@ -270,17 +270,17 @@ MOVE_DEFS = {
         "back_heavy": {"name": "对空斩",   "windup": 10, "active": 6,  "recover": 18, "dmg": 16, "range": 42, "launch": True},
         "air_heavy":  {"name": "俯冲刃",   "windup": 7,  "active": 8,  "recover": 6,  "dmg": 14, "range": 34, "launch": True},
         "dash_light": {"name": "相位刺",   "windup": 10, "active": 6,  "recover": 16, "dmg": 14, "range": 40, "rush": 3.6},
-        "fwd_bolt":   {"name": "裂地光刃", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 5.0, "dist": 200}},
+        "fwd_bolt":   {"name": "裂地光刃", "windup": 12, "active": 4,  "recover": 22, "dmg": 7,  "bolt": {"speed": 4.4, "dist": 200}},
         "od":         {"name": "相位刺EX", "windup": 8,  "active": 8,  "recover": 18, "dmg": 18, "range": 52, "rush": 4.0, "launch": True},
         "back_bolt":  None,
     },
     "verdant": {
         "heavy":      {"name": "重击",     "windup": 13, "active": 5,  "recover": 19, "dmg": 19, "range": 43, "launch": True},
-        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 20, "range": 45, "launch": True, "lunge": 1.1},
+        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 22, "range": 45, "launch": True, "lunge": 1.1},
         "back_heavy": {"name": "扫击",     "windup": 14, "active": 6,  "recover": 20, "dmg": 17, "range": 44, "launch": True},
         "air_heavy":  {"name": "种子散布", "windup": 6,  "active": 10, "recover": 8,  "dmg": 4,  "range": 30, "bolt": {"speed": 0, "vy": 0.6, "delay": 45, "drop": True, "shots": 2, "interval": 6}},
-        "dash_light": {"name": "藤蔓勾拉", "windup": 11, "active": 6,  "recover": 18, "dmg": 12, "range": 42, "pull": 34},
-        "fwd_bolt":   {"name": "弧线榴弹", "windup": 12, "active": 4,  "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24}},
+        "dash_light": {"name": "藤蔓勾拉", "windup": 11, "active": 6,  "recover": 18, "dmg": 14, "range": 42, "pull": 34, "launch": True},
+        "fwd_bolt":   {"name": "弧线榴弹", "windup": 12, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.4, "vy": -4.0, "grav": 0.24}},
         "od":         {"name": "弧线榴弹EX", "windup": 10, "active": 4, "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24, "shots": 2, "interval": 8}},
         "back_bolt":  {"name": "种子地雷", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 0, "delay": 60, "mine": True}},
     },
@@ -335,6 +335,14 @@ AI_DIFFICULTY = {
                "heavy_p": 0.30, "special_p": 0.22, "od_p": 0.05, "impact_p": 0.06,
                "parry_p": 0.03},
 }
+
+# ---------------------------------------------------------------- 阶段7：场地 / 战绩
+STAGE_ORDER = ("night", "dawn")  # 菜单 E 键轮换
+STAGES = {
+    "night": {"name": "废墟月夜"},
+    "dawn":  {"name": "熔炉黎明"},
+}
+STATS_FILE = "stats.json"        # 战绩存档（对局数/胜场/常用机体）
 
 # ---------------------------------------------------------------- 阶段4：KO 高光回放
 REPLAY_FRAMES = 100             # 回溯快照帧数

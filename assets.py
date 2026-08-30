@@ -365,36 +365,72 @@ def _lerp(c1, c2, t):
     return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
 
 
-def build_background(seed=7):
-    """预渲染 480x270 战场背景：夜空、星空、月亮、双层废墟、金属地面。"""
+# 场地主题（阶段7）：夜战 / 熔炉黎明——同名键对应 settings.STAGES
+THEMES = {
+    "night": {
+        "sky_top": (14, 12, 38), "sky_bot": (72, 38, 70),
+        "stars": 90,
+        "star_cols": [(180, 180, 210), (120, 120, 160), (230, 230, 240)],
+        "far": (36, 26, 56), "near": (22, 16, 38),
+        "win_far": (150, 120, 80), "win_near": (120, 90, 70),
+        "ground": (52, 50, 68), "ground_dark": (38, 36, 52),
+        "ground_hi": (86, 84, 104), "rivet": (70, 68, 88),
+        "hazard": (66, 62, 84),
+    },
+    "dawn": {
+        "sky_top": (40, 18, 44), "sky_bot": (235, 130, 62),
+        "stars": 14,
+        "star_cols": [(255, 210, 160), (255, 180, 130)],
+        "far": (70, 34, 50), "near": (40, 20, 32),
+        "win_far": (255, 190, 110), "win_near": (255, 160, 90),
+        "ground": (78, 56, 54), "ground_dark": (56, 40, 40),
+        "ground_hi": (128, 96, 84), "rivet": (104, 78, 70),
+        "hazard": (122, 84, 52),
+    },
+}
+
+
+def build_background(seed=7, theme="night"):
+    """预渲染 480x270 战场背景：天空、天体、双层废墟、金属地面（按主题换装）。"""
+    th = THEMES.get(theme, THEMES["night"])
     rng = random.Random(seed)
     bg = pygame.Surface((INTERNAL_W, INTERNAL_H))
 
-    # --- 夜空（量化成色带，复古感）---
+    # --- 天空（量化成色带，复古感）---
     bands = 9
     for i in range(bands):
         t = i / (bands - 1)
-        color = _lerp((14, 12, 38), (72, 38, 70), t)
+        color = _lerp(th["sky_top"], th["sky_bot"], t)
         y0 = int(i * GROUND_Y / bands)
         y1 = int((i + 1) * GROUND_Y / bands)
         bg.fill(color, (0, y0, INTERNAL_W, y1 - y0))
 
     # --- 星空 ---
-    for _ in range(90):
+    for _ in range(th["stars"]):
         x, y = rng.randrange(INTERNAL_W), rng.randrange(int(GROUND_Y * 0.72))
-        c = rng.choice([(180, 180, 210), (120, 120, 160), (230, 230, 240)])
+        c = rng.choice(th["star_cols"])
         bg.set_at((x, y), c)
 
-    # --- 月亮 ---
-    mx, my, r = 396, 44, 17
-    pygame.draw.circle(bg, (232, 228, 205), (mx, my), r)
-    pygame.draw.circle(bg, (206, 200, 178), (mx - 4, my + 3), 4)
-    pygame.draw.circle(bg, (206, 200, 178), (mx + 6, my - 5), 3)
-    pygame.draw.circle(bg, (206, 200, 178), (mx + 2, my + 7), 2)
-    pygame.draw.circle(bg, (14, 12, 38), (mx + 11, my - 9), 4)  # 缺角
+    # --- 天体：夜=缺角月亮；黎明=带光晕的朝阳 ---
+    if theme == "dawn":
+        mx, my, r = 92, 58, 20
+        bg.fill(_lerp(th["sky_bot"], (255, 220, 150), 0.35),
+                (mx - r - 10, my - r - 10, (r + 10) * 2, (r + 10) * 2))
+        pygame.draw.circle(bg, (255, 226, 160), (mx, my), r + 5)
+        pygame.draw.circle(bg, (255, 206, 110), (mx, my), r)
+        pygame.draw.circle(bg, (255, 240, 200), (mx - 5, my - 6), 4)
+        pygame.draw.line(bg, (70, 30, 46), (mx - r - 14, my + 4),
+                         (mx + r + 14, my + 2), 2)   # 地平线云带
+    else:
+        mx, my, r = 396, 44, 17
+        pygame.draw.circle(bg, (232, 228, 205), (mx, my), r)
+        pygame.draw.circle(bg, (206, 200, 178), (mx - 4, my + 3), 4)
+        pygame.draw.circle(bg, (206, 200, 178), (mx + 6, my - 5), 3)
+        pygame.draw.circle(bg, (206, 200, 178), (mx + 2, my + 7), 2)
+        pygame.draw.circle(bg, th["sky_top"], (mx + 11, my - 9), 4)  # 缺角
 
     # --- 远景废墟剪影 ---
-    far = (36, 26, 56)
+    far = th["far"]
     x = -6
     while x < INTERNAL_W:
         w = rng.randrange(18, 42)
@@ -409,11 +445,11 @@ def build_background(seed=7):
         for _ in range(rng.randrange(0, 4)):
             wx = x + rng.randrange(2, max(3, w - 2))
             wy = top + rng.randrange(4, max(5, h - 2))
-            bg.set_at((wx, wy), (150, 120, 80))
+            bg.set_at((wx, wy), th["win_far"])
         x += w + rng.randrange(2, 10)
 
     # --- 近景废墟剪影（更深、更高细节）---
-    near = (22, 16, 38)
+    near = th["near"]
     x = -10
     while x < INTERNAL_W:
         w = rng.randrange(24, 56)
@@ -426,22 +462,22 @@ def build_background(seed=7):
         for _ in range(rng.randrange(0, 3)):
             wx = x + rng.randrange(2, max(3, w - 2))
             wy = top + rng.randrange(3, max(4, h - 2))
-            bg.set_at((wx, wy), (120, 90, 70))
+            bg.set_at((wx, wy), th["win_near"])
         x += w + rng.randrange(6, 18)
 
     # --- 金属地面 ---
-    base = (52, 50, 68)
-    dark = (38, 36, 52)
+    base = th["ground"]
+    dark = th["ground_dark"]
     bg.fill(base, (0, GROUND_Y, INTERNAL_W, INTERNAL_H - GROUND_Y))
-    bg.fill((86, 84, 104), (0, GROUND_Y, INTERNAL_W, 2))      # 顶缘高光
+    bg.fill(th["ground_hi"], (0, GROUND_Y, INTERNAL_W, 2))    # 顶缘高光
     bg.fill(dark, (0, GROUND_Y + 22, INTERNAL_W, INTERNAL_H - GROUND_Y - 22))
     for gx in range(0, INTERNAL_W, 32):                        # 面板缝
         pygame.draw.line(bg, dark, (gx, GROUND_Y + 2), (gx, GROUND_Y + 20), 1)
         for ry in (GROUND_Y + 6, GROUND_Y + 14):
-            bg.set_at((gx + 4, ry), (70, 68, 88))
+            bg.set_at((gx + 4, ry), th["rivet"])
     for gx in range(0, INTERNAL_W, 48):                        # 警示斜纹
         for i in range(8):
-            bg.set_at((gx + i, GROUND_Y + 24 + i % 3), (66, 62, 84))
+            bg.set_at((gx + i, GROUND_Y + 24 + i % 3), th["hazard"])
     return bg
 
 
