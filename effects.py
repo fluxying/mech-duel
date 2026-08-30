@@ -7,7 +7,7 @@ import random
 import pygame
 
 from settings import (RANGED_DAMAGE, RANGED_SPEED, ARENA_LEFT, ARENA_RIGHT,
-                      INTERNAL_W, COLORS, GROUND_Y,
+                      INTERNAL_W, COLORS, GROUND_Y, BOLT_PALETTES,
                       AZURE_SUPER_BOLT_DMG, AZURE_SUPER_BOLT_SPEED,
                       VERDANT_SUPER_GRAV)
 from assets import build_bolts
@@ -79,8 +79,8 @@ class Projectile:
             self.dead = True
 
     def _trail_color(self):
-        pal = {"hot": COLORS["spark_hot"], "cool": COLORS["spark_cool"]}
-        return pal["hot"] if self.owner.spec["bolt_color"] == "hot" else pal["cool"]
+        """拖尾色直接取弹体调色板主色——acid 弹即酸绿，不再错成 cool 青。"""
+        return BOLT_PALETTES[self.owner.spec["bolt_color"]]["S"]
 
     def rect(self):
         if self.big:

@@ -92,6 +92,14 @@ class PadMap:
         except Exception:
             self.joys = []
 
+    def rumble(self, low, high, ms):
+        """手柄震动：命中轻震 / 破防中震 / KO 长震。无手柄/设备不支持时静默。"""
+        for joy in self.joys:
+            try:
+                joy.rumble(low, high, ms)
+            except Exception:
+                pass
+
     def poll(self, keymaps):
         """按玩家键位表把手柄状态翻译成 {键码: bool} 列表。"""
         outs = [{} for _ in keymaps]
@@ -162,14 +170,21 @@ def _seeded_rng(seed):
     return random.Random(seed) if seed is not None else random.Random()
 
 
+def demo_pair(i):
+    """AI 演示自动轮换：第 i 局的 (机体1, 机体2, 难度)。"""
+    return (MECH_ORDER[i % 3], MECH_ORDER[(i // 3 + 1) % 3],
+            AI_LEVELS[i % 3])
+
+
 class Fight:
     """一场三局两胜对战：回合状态机 + 判定 + 特效编排。"""
 
     def __init__(self, mode, frames, bg, sfx, m1="garnet", m2="azure",
-                 difficulty="normal", seed=None, quiet=False):
+                 difficulty="normal", seed=None, quiet=False, pads=None):
         self.mode = mode          # "2p" | "ai" | "cpu" | "demo" | "training"
         self.training = mode == "training"
         self.difficulty = difficulty
+        self.pads = pads             # 手柄震动（run_window 注入，可为 None）
         self.frames = frames
         self.bg = bg
         self.sfx = sfx
@@ -203,6 +218,11 @@ class Fight:
         # 训练模式开关
         self.show_hitboxes = False
         self.dummy_block = False
+
+    def _rumble(self, mag, ms):
+        """手柄震动钩子：mag 0~1，ms 毫秒。"""
+        if self.pads is not None:
+            self.pads.rumble(min(1.0, mag * 0.35), min(1.0, mag), ms)
 
     # -------------------------------------------------- 回合管理
     def reset_round(self):
@@ -322,6 +342,7 @@ class Fight:
                 self.hitstop = SUPER_FLASH_FRAMES
                 self.fx.flash(150)
                 self.fx.shake(6)
+                self._rumble(0.6, 200)
                 self.sfx.play("super")
 
     def _spawn_slashes(self):
@@ -397,6 +418,7 @@ class Fight:
                                   heavy=True, unblockable=True, launch=True)
             if res == "hit":
                 self.hitstop = HITSTOP_FRAMES + 3
+                self._rumble(0.4, 120)
             elif res == "ko":
                 self._on_ko()
             meter(atk, dfn, "hit")
@@ -423,6 +445,8 @@ class Fight:
             meter(atk, dfn, res)
             if res == "hit" or res == "break":
                 self.hitstop = HITSTOP_FRAMES
+                self._rumble(0.35 if res == "hit" else 0.6,
+                             90 if res == "hit" else 160)
             elif res == "ko":
                 self._on_ko()
         # 光束判定
@@ -439,6 +463,9 @@ class Fight:
                     continue
                 bolt.dead = True
                 meter(bolt.owner, target, res)
+                if res == "hit" or res == "break":
+                    self._rumble(0.2 if res == "hit" else 0.6,
+                                 70 if res == "hit" else 160)
                 if res == "ko":
                     self._on_ko()
 
@@ -477,6 +504,7 @@ class Fight:
             if self.wins[idx] >= ROUNDS_TO_WIN:
                 self.match_winner = winner
         self.sfx.play("ko")
+        self._rumble(1.0, 320)
         self.phase = REPLAY          # 先回放高光，再进慢镜头
         self.replay_i = 0
 
@@ -728,9 +756,11 @@ def run_window():
     sel = None                             # 选人界面状态
     kc = None                              # 按键设置界面状态
     if demo:
-        fight = Fight("demo", frames, bg, sfx, difficulty=difficulty)
+        fight = Fight("demo", frames, bg, sfx, difficulty=difficulty,
+                      pads=pads)
     menu_t = 0
     victory_t = 0
+    demo_i = 0                             # 演示轮换计数（demo_pair）
     running = True
     # 冒烟钩子：MECHDUEL_SMOKE=N 帧后自动退出（配合 dummy 驱动无头自检）
     smoke = int(os.environ.get("MECHDUEL_SMOKE", "0") or 0)
@@ -743,7 +773,7 @@ def run_window():
             kc = KeyConfigState()
             scene = KEYCONFIG
         elif smoke_scene == "training":
-            fight = Fight("training", frames, bg, sfx)
+            fight = Fight("training", frames, bg, sfx, pads=pads)
     frame_i = 0
 
     while running:
@@ -777,7 +807,7 @@ def run_window():
                         sfx.play("menu")
                     elif ev.key == pygame.K_4:
                         fight = Fight("demo", frames, bg, sfx,
-                                      difficulty=difficulty)
+                                      difficulty=difficulty, pads=pads)
                         scene = FIGHT
                         sfx.play("menu")
                     elif ev.key == pygame.K_5:
@@ -797,7 +827,7 @@ def run_window():
                         mode = ("2p" if sel.mode == "2p"
                                 else "ai" if sel.mode == "ai" else "training")
                         fight = Fight(mode, frames, bg, sfx, m1=m1, m2=m2,
-                                      difficulty=difficulty)
+                                      difficulty=difficulty, pads=pads)
                         scene, sel = FIGHT, None
                         sfx.play("menu")
                 elif scene == FIGHT and fight is not None:
@@ -846,8 +876,11 @@ def run_window():
             victory_t += 1
             draw_victory(frame, bg, fight.match_winner.spec,
                          fight.wins[0], fight.wins[1])
-            if demo and victory_t > FPS * 6:   # 演示模式自动再来一局
-                fight.restart_match()
+            if demo and victory_t > FPS * 6:   # 演示模式：轮换机体与难度再来一局
+                demo_i += 1
+                m1, m2, diff = demo_pair(demo_i)
+                fight = Fight("demo", frames, bg, sfx, m1=m1, m2=m2,
+                              difficulty=diff, pads=pads)
                 scene = FIGHT
 
         scaled = pygame.transform.scale(frame, (WINDOW_W, WINDOW_H))
@@ -1310,6 +1343,21 @@ def selftest():
         v.update(f21.p1, f21.fx, sfx)
     assert v.combo_count == 0, "超时未重置连段"
     print("[21] 连段衰减 + 计数 + 重置: OK")
+
+    # 22) acid 弹拖尾颜色 + 演示轮换 + 手柄震动静默
+    from settings import BOLT_PALETTES
+    fx22 = Fx()
+    m22 = Mech("verdant", 200, 1, frames)
+    fx22.spawn_bolt(m22, 221, GROUND_Y - 38)
+    for _ in range(3):
+        fx22.bolts[0].update(fx22)
+    assert any(p.color == BOLT_PALETTES["acid"]["S"] for p in fx22.particles), \
+        "acid 拖尾颜色未修正"
+    assert len(set(demo_pair(i) for i in range(9))) == 9, "演示轮换组合重复"
+    assert demo_pair(0)[0] != demo_pair(0)[1], "首局演示不应镜像"
+    pads = PadMap()
+    pads.rumble(0.5, 1.0, 100)             # 无手柄环境应静默不抛错
+    print("[22] acid 拖尾 + 演示轮换 + 手柄震动: OK")
 
     # 23) 受防硬直 + 惩罚反击
     f23 = Fight("2p", frames, bg, sfx)
