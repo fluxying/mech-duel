@@ -100,6 +100,14 @@ MECH_SPECS = {
         "bolt_color": "hot",     # 光束弹配色（红橙）
         "throw_damage": 18,      # 投技伤害（无视格挡）
         "super_name": "熔核冲击",  # 超必杀：向前冲撞，命中重创击飞（伤害走 GARNET_SUPER_DMG）
+        "super_levels": {
+            1: {"name": "熔核冲击", "total": 40, "active": (8, 24),
+                "rush": 6.0, "dmg": 30},                    # = GARNET_SUPER_DMG
+            2: {"name": "地裂冲击", "total": 44, "active": (8, 24),
+                "rush": 6.0, "dmg": 34, "wave": True},
+            3: {"name": "熔核天崩", "total": 48, "active": (8, 24),
+                "rush": 6.0, "dmg": 50, "grab": True},
+        },
     },
     "azure": {
         "name": "AZURE",
@@ -115,6 +123,13 @@ MECH_SPECS = {
         "bolt_color": "cool",    # 光束弹配色（青蓝）
         "throw_damage": 15,      # 投技伤害（无视格挡）
         "super_name": "苍蓝齐射",  # 超必杀：连发三道强化光束（伤害走 AZURE_SUPER_BOLT_DMG）
+        "super_levels": {
+            1: {"name": "苍蓝齐射", "total": 40, "shots": (10, 18, 26), "dmg": 8},
+            2: {"name": "疾影齐射", "total": 44, "shots": (10, 18, 26), "dmg": 9,
+                "drift": 0.8},
+            3: {"name": "苍穹风暴", "total": 74,
+                "shots": tuple(range(10, 70, 5)), "dmg": 4},   # 12 段 ×4
+        },
     },
     "verdant": {
         "name": "VERDANT",
@@ -130,6 +145,13 @@ MECH_SPECS = {
         "bolt_color": "acid",    # 光束弹配色（酸绿）
         "throw_damage": 16,
         "super_name": "翠暴轰炸",  # 超必杀：两发弧线榴弹（伤害走 VERDANT_SUPER_BOLT_DMG）
+        "super_levels": {
+            1: {"name": "翠暴轰炸", "total": 40, "shots": (12, 24), "dmg": 12},
+            2: {"name": "连天翠暴", "total": 46, "shots": (10, 16, 22, 28),
+                "dmg": 9},
+            3: {"name": "世界树降临", "total": 66,
+                "shots": tuple(range(10, 42, 4)), "dmg": 6},   # 8 段 ×6
+        },
     },
 }
 
@@ -182,11 +204,12 @@ CANCEL_ALLOWED = "hit"          # 仅命中后允许取消
 JUGGLE_VY = -2.8
 # 受身：落地硬直中按跳跃键提前起身，带起身无敌
 WAKE_INVULN = 20                # 受身起身无敌帧
-# 超必杀：独立 SUPER 槽，命中/受击/格挡积攒，满 100 释放
-SUPER_MAX = 100
-SUPER_GAIN_HIT = 12             # 命中积攒
-SUPER_GAIN_TAKE = 8             # 受击积攒
-SUPER_GAIN_BLOCK = 4            # 格挡积攒
+# 超必杀：独立 SUPER 槽（3 层 ×100），命中/受击/格挡积攒，Lv1-3 依次消耗 100/200/300
+SUPER_MAX = 300
+SUPER_COST = 100
+SUPER_GAIN_HIT = 18             # 命中积攒
+SUPER_GAIN_TAKE = 12            # 受击积攒
+SUPER_GAIN_BLOCK = 6            # 格挡积攒
 SUPER_TOTAL = 40                # 超必杀动作总帧数
 SUPER_INVULN_FRAMES = 20        # 发动后无敌帧（含定格演出时间）
 SUPER_FLASH_FRAMES = 26         # 发动瞬间全局定格（演出）
@@ -263,6 +286,32 @@ MOVE_DEFS = {
     },
 }
 
+# ---------------------------------------------------------------- 阶段6B：相位槽（Drive）+ 三层超必杀
+DRIVE_MAX = 120                  # Drive 槽（HUD 6 格）
+DRIVE_REGEN = 0.05               # 每帧缓回
+DRIVE_COST = 20                  # 1 格：OD 强化技 / Drive Rush
+DRIVE_REVERSAL_COST = 40         # 2 格：逆转反技
+DRIVE_HIT_LOSS = 12              # 受击流失
+DRIVE_BLOCK_LOSS = 6             # 被防流失
+DRIVE_PARRY_GAIN = 25            # 完美格挡回复
+DRIVE_HIT_GAIN = 6               # 命中回复
+PARRY_WINDOW = 5                 # 完美格挡判定窗（按防后 N 帧内被击）
+PARRY_STAGGER = 12               # 被完美格挡后攻击方踉跄帧
+PARRY_RUSH_WINDOW = 30           # 完美格挡后免费绿冲窗口（帧）
+RUSH_FRAMES = 20                 # Drive Rush 时长
+RUSH_SPEED = 4.5
+DIM_CHARGE_MIN = 12              # Drive 冲击最小蓄力帧
+DIM_CHARGE_MAX = 45              # 蓄力上限（自动出手）
+DIM_DMG = 28
+DIM_RANGE = 50
+DIM_GUARD_MULT = 3.0             # 被防时对防御槽伤害倍率
+DREV_DMG = 14                    # 逆转反技
+DREV_RANGE = 42
+DREV_FRAMES = (8, 4, 16)
+WALL_SPLASH_STUN = 40            # 墙崩眩晕帧（GBREAK 复用）
+REVERSAL_DEF = {"name": "逆转反技", "windup": 8, "active": 4, "recover": 16,
+                "dmg": DREV_DMG, "range": DREV_RANGE, "launch": True}
+
 # ---------------------------------------------------------------- 阶段3：第三机甲专属超必杀 / AI 难度
 VERDANT_SUPER_SHOTS = (12, 24)    # 两发榴弹发射帧
 VERDANT_SUPER_BOLT_DMG = 12       # 单发榴弹伤害
@@ -273,15 +322,18 @@ AI_DIFFICULTY = {
     "easy":   {"react_melee": 0.015, "react_bolt": 0.020, "grab_block": 0.015,
                "grab_near": 0.35, "dodge_throw": 0.015, "decide": (16, 30),
                "mistake": 0.30, "super_p": 0.20, "melee_p": 0.30, "block_p": 0.25,
-               "heavy_p": 0.10, "special_p": 0.08},
+               "heavy_p": 0.10, "special_p": 0.08, "od_p": 0.0, "impact_p": 0.0,
+               "parry_p": 0.0},
     "normal": {"react_melee": 0.035, "react_bolt": 0.050, "grab_block": 0.060,
                "grab_near": 0.60, "dodge_throw": 0.060, "decide": (8, 16),
                "mistake": 0.10, "super_p": 0.45, "melee_p": 0.50, "block_p": 0.20,
-               "heavy_p": 0.20, "special_p": 0.15},
+               "heavy_p": 0.20, "special_p": 0.15, "od_p": 0.02, "impact_p": 0.03,
+               "parry_p": 0.01},
     "hard":   {"react_melee": 0.075, "react_bolt": 0.100, "grab_block": 0.120,
                "grab_near": 0.75, "dodge_throw": 0.140, "decide": (5, 11),
                "mistake": 0.04, "super_p": 0.60, "melee_p": 0.65, "block_p": 0.10,
-               "heavy_p": 0.30, "special_p": 0.22},
+               "heavy_p": 0.30, "special_p": 0.22, "od_p": 0.05, "impact_p": 0.06,
+               "parry_p": 0.03},
 }
 
 # ---------------------------------------------------------------- 阶段4：KO 高光回放

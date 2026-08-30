@@ -30,10 +30,13 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       VERDANT_SUPER_BOLT_DMG, GARNET_SUPER_DMG,
                       GUARD_MAX, JUMP_SEP_Y,
                       THROW_TECH_LAG, THROW_TECH_PUSH, BLOCK_STUN,
-                      PUNISH_MULT, COMBO_RESET_FRAMES, COMBO_SCALE_MIN)
+                      PUNISH_MULT, COMBO_RESET_FRAMES, COMBO_SCALE_MIN,
+                      DRIVE_MAX, DRIVE_HIT_GAIN, DRIVE_PARRY_GAIN,
+                      PARRY_STAGGER, DIM_DMG, WALL_SPLASH_STUN, SUPER_COST,
+                      DIM_GUARD_MULT)
 from assets import (build_mech_frames, build_background, get_font,
                     SPRITE_W, SPRITE_H, ANCHOR_FX, PIX)
-from mech import Mech
+from mech import Mech, IDLE
 from effects import Fx
 from ai import AIController
 from sfx import Sfx
@@ -218,6 +221,9 @@ class Fight:
         # 训练模式开关
         self.show_hitboxes = False
         self.dummy_block = False
+        # 训练输入历史（最近 30 帧双方输入位图）
+        self.input_log = (collections.deque(maxlen=30),
+                          collections.deque(maxlen=30))
 
     def _rumble(self, mag, ms):
         """手柄震动钩子：mag 0~1，ms 毫秒。"""
@@ -236,6 +242,8 @@ class Fight:
         self.banner_sub = None
         self.replay.clear()
         self.replay_i = 0
+        self.input_log[0].clear()
+        self.input_log[1].clear()
 
     def restart_match(self):
         self.wins = [0, 0]
@@ -294,6 +302,11 @@ class Fight:
                 self.p2.input["block"] = True   # 训练假人：自动格挡
             self.p1.update(self.p2, self.fx, self.sfx)
             self.p2.update(self.p1, self.fx, self.sfx)
+            if self.training:                # 输入历史记录
+                self.input_log[0].append(
+                    frozenset(k for k, v in self.p1.input.items() if v))
+                self.input_log[1].append(
+                    frozenset(k for k, v in self.p2.input.items() if v))
             self._super_cinematic()          # 超必杀发动定格演出
             self._spawn_slashes()
             self._separate()
@@ -338,11 +351,15 @@ class Fight:
         """超必杀发动瞬间：全局定格 + 白闪 + 震屏 + 专属音效。"""
         for m in (self.p1, self.p2):
             if m.super_pending:
+                lvl = m.super_pending
                 m.super_pending = False
-                self.hitstop = SUPER_FLASH_FRAMES
+                self.hitstop = SUPER_FLASH_FRAMES + 7 * (lvl - 1)
                 self.fx.flash(150)
                 self.fx.shake(6)
                 self._rumble(0.6, 200)
+                self.fx.callout(INTERNAL_W / 2, 96,
+                                m.spec["super_levels"][lvl]["name"],
+                                (255, 214, 100))
                 self.sfx.play("super")
 
     def _spawn_slashes(self):
@@ -373,26 +390,57 @@ class Fight:
     def _combat(self):
         # 超必杀槽位结算（命中双方都积攒）
         def meter(atk, dfn, res):
-            if res in ("hit", "break"):
+            if res in ("hit", "break", "armor"):
                 atk.super = min(SUPER_MAX, atk.super + SUPER_GAIN_HIT)
                 dfn.super = min(SUPER_MAX, dfn.super + SUPER_GAIN_TAKE)
+                atk.drive = min(DRIVE_MAX, atk.drive + DRIVE_HIT_GAIN)
             elif res == "blocked":
                 dfn.super = min(SUPER_MAX, dfn.super + SUPER_GAIN_BLOCK)
 
-        # 超必杀判定：GARNET「熔核冲击」冲撞（AZURE 射击型走光束判定）
+        # 超必杀判定：GARNET 系冲撞（等级由 super_level 决定；AZURE/VERDANT 射击型走光束判定）
         for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
             hb = atk.super_hitbox()
             if hb is None or atk.super_did_hit:
                 continue
             if hb.colliderect(dfn.body_rect()):
                 atk.super_did_hit = True
-                res = dfn.take_damage(GARNET_SUPER_DMG, atk.facing,
+                lv = atk.spec["super_levels"][atk.super_level]
+                res = dfn.take_damage(lv["dmg"], atk.facing,
                                       self.fx, self.sfx,
                                       heavy=True, unblockable=True, launch=True)
-                self.fx.shake(8)
+                self.fx.shake(8 if atk.super_level < 3 else 10)
                 if res == "ko":
                     self._on_ko()
                 meter(atk, dfn, "hit")
+        # Drive 冲击判定：命中大伤击飞；贴墙目标触发墙崩（眩晕 40 帧）
+        for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
+            hb = atk.dim_hitbox()
+            if hb is None or atk.move_did_hit:
+                continue
+            if hb.colliderect(dfn.body_rect()):
+                atk.move_did_hit = True
+                res = dfn.take_damage(DIM_DMG, atk.facing, self.fx, self.sfx,
+                                      heavy=True, launch=True,
+                                      guard_mult=DIM_GUARD_MULT)
+                if res is None:
+                    continue
+                self.hitstop = HITSTOP_FRAMES + 2
+                self._rumble(0.6, 160)
+                meter(atk, dfn, res)
+                if (res in ("hit", "break", "armor") and dfn.grounded
+                        and (dfn.x <= ARENA_LEFT + 30
+                             or dfn.x >= ARENA_RIGHT - 30)):
+                    dfn.gb_stun = WALL_SPLASH_STUN
+                    dfn.state = "guard_break"
+                    dfn.t = 0
+                    dfn.vy = 0
+                    dfn._stun_extra = 0
+                    self.fx.callout(dfn.x, dfn.y - 76, "WALL BREAK",
+                                    (255, 120, 90))
+                    self.fx.shake(8)
+                    self._rumble(0.8, 220)
+                if res == "ko":
+                    self._on_ko()
         # 投技判定：THROW_HIT_T 帧抓取范围内地面目标，无视格挡（破防手段）
         # 先收集双方判定再统一结算：同帧对拼不因结算顺序偏袒先手方
         throws = []
@@ -446,6 +494,10 @@ class Fight:
             if res is None:            # 对方无敌帧：判定不消耗，攻击穿透
                 continue
             atk.melee_did_hit = True
+            if res == "parried":           # 被完美格挡：攻击中断 + 踉跄
+                atk.stagger = PARRY_STAGGER
+                atk._enter(IDLE)
+                continue
             if res == "blocked":
                 atk.melee_blocked = True   # 被防 → 解锁被防取消
             meter(atk, dfn, res)
@@ -474,6 +526,10 @@ class Fight:
             if res is None:            # 无敌帧：判定不消耗
                 continue
             atk.move_did_hit = True
+            if res == "parried":           # 被完美格挡：攻击中断 + 踉跄
+                atk.stagger = PARRY_STAGGER
+                atk._enter(IDLE)
+                continue
             meter(atk, dfn, res)
             if d.get("pull") and res in ("hit", "break"):
                 dfn.x = max(ARENA_LEFT, min(ARENA_RIGHT,
@@ -496,6 +552,10 @@ class Fight:
                 if res is None:            # 无敌帧：光束穿透不消失
                     continue
                 bolt.dead = True
+                if res == "parried":       # 被完美格挡：弹体被弹开
+                    bolt.owner.stagger = PARRY_STAGGER
+                    bolt.owner._enter(IDLE)
+                    continue
                 meter(bolt.owner, target, res)
                 if res == "hit" or res == "break":
                     self._rumble(0.2 if res == "hit" else 0.6,
@@ -622,6 +682,18 @@ class Fight:
                 f"F1 判定框:{'开' if self.show_hitboxes else '关'}"
                 f"  F2 假人格挡:{'开' if self.dummy_block else '关'}"
                 f"  R 重置"]
+        # 输入历史位图：上=P1 下=P2，亮点=按键（金=攻击系 蓝=移动系）
+        acts = ("left", "right", "jump", "block", "melee", "heavy",
+                "ranged", "throw", "super")
+        for pi, log in enumerate(self.input_log):
+            base_y = INTERNAL_H - 31 - 14 + pi * 5
+            for fi, acts_f in enumerate(log):
+                x = 6 + fi * 3
+                for ai, act in enumerate(acts):
+                    if act in acts_f:
+                        col = ((255, 214, 100) if ai >= 4
+                               else (120, 180, 255))
+                        frame.fill(col, (x, base_y + ai, 2, 1))
         y = INTERNAL_H - 31
         for i, s in enumerate(rows):
             img = fnt.render(s, True, (195, 205, 220))
@@ -1141,7 +1213,8 @@ def selftest():
     f12.step(FakeKeys({pygame.K_i: True}))
     assert f12.p1.state == "super", f"未进入超必杀: {f12.p1.state}"
     assert f12.hitstop == SUPER_FLASH_FRAMES, "发动定格演出缺失"
-    assert f12.p1.invuln and f12.p1.super == 0
+    assert f12.p1.invuln and f12.p1.super == SUPER_MAX - SUPER_COST,         "Lv1 应消耗 1 层槽位"
+    assert f12.p1.super_level == 1
     for _ in range(150):
         f12.step(FakeKeys({}))
         if f12.p2.hp < f12.p2.max_hp:
@@ -1606,6 +1679,109 @@ def selftest():
     assert f27c.p1.state == "heavy" and f27c.p1.move_key == "heavy", \
         f"目标连段未生效: {f27c.p1.state}"
     print("[27] 取消阶梯（被防取消/轻链/目标连段）: OK")
+
+    # 28) 相位槽：完美格挡 / Drive 冲击（墙崩）/ 逆转反技 / OD / 绿冲
+    from settings import (DRIVE_COST, DRIVE_REVERSAL_COST, PARRY_WINDOW,
+                          PARRY_RUSH_WINDOW, DIM_CHARGE_MAX, DREV_DMG)
+    f28 = Fight("2p", frames, bg, sfx)
+    f28.phase = ACTIVE
+    f28.p2.state = "block"
+    f28.p2.parry_window = PARRY_WINDOW
+    d0 = f28.p2.drive
+    assert f28.p2.take_damage(12, 1, f28.fx, sfx, heavy=True) == "parried"
+    assert f28.p2.hp == f28.p2.max_hp, "完美格挡不应掉血"
+    assert f28.p2.drive == min(DRIVE_MAX, d0 + DRIVE_PARRY_GAIN),         "完美格挡未回复 Drive"
+    assert f28.p2.parry_rush > 0, "完美格挡未开启绿冲窗口"
+    # Drive 冲击：轻+重蓄力 → 出手命中贴墙对手 → 墙崩
+    f28b = Fight("2p", frames, bg, sfx)
+    f28b.phase = ACTIVE
+    f28b.p1.x, f28b.p2.x = 75, 45          # p2 贴左墙
+    keys = FakeKeys({pygame.K_j: True, pygame.K_u: True})
+    f28b.step(keys)
+    assert f28b.p1.state == "drive_impact", f"冲击未触发: {f28b.p1.state}"
+    for _ in range(DIM_CHARGE_MAX + 10):
+        f28b.step(keys)
+        if f28b.p2.state == "guard_break":
+            break
+    assert f28b.p2.state == "guard_break", "冲击未命中贴墙目标"
+    assert f28b.p2.gb_stun == WALL_SPLASH_STUN, "墙崩眩晕帧不符"
+    # 逆转反技：防御中 前方向+重，耗 2 格 Drive
+    f28c = Fight("2p", frames, bg, sfx)
+    f28c.phase = ACTIVE
+    f28c.p1.x, f28c.p2.x = 240, 226
+    f28c.step(FakeKeys({pygame.K_DOWN: True}))       # p2 先进入防御
+    keys = FakeKeys({pygame.K_DOWN: True, pygame.K_RIGHT: True,
+                     pygame.K_KP5: True})
+    f28c.step(keys)
+    assert f28c.p2.state == "drive_reversal", f"逆转未触发: {f28c.p2.state}"
+    assert f28c.p2.drive == DRIVE_MAX - DRIVE_REVERSAL_COST, "逆转消耗不符"
+    for _ in range(16):
+        f28c.step(keys)
+        if f28c.p1.hp < f28c.p1.max_hp:
+            break
+    assert f28c.p1.hp <= f28c.p1.max_hp - DREV_DMG, "逆转反技未命中"
+    # OD 强化技：前方向+轻+束同按，耗 1 格 Drive
+    f28d = Fight("2p", frames, bg, sfx)
+    f28d.phase = ACTIVE
+    f28d.p1.x, f28d.p2.x = 180, 300
+    keys = FakeKeys({pygame.K_d: True, pygame.K_j: True, pygame.K_k: True})
+    f28d.step(keys)
+    assert f28d.p1.state == "special" and f28d.p1.move_key == "od",         f"OD 未触发: {f28d.p1.state}/{f28d.p1.move_key}"
+    assert f28d.p1.drive == DRIVE_MAX - DRIVE_COST, "OD 消耗不符"
+    # 完美格挡后免费绿冲
+    f28e = Fight("2p", frames, bg, sfx)
+    f28e.phase = ACTIVE
+    f28e.p1.x, f28e.p2.x = 200, 240
+    f28e.p2.state = "block"
+    f28e.p2.parry_window = PARRY_WINDOW
+    f28e.p2.take_damage(12, 1, f28e.fx, sfx, heavy=True)
+    for ks in ({pygame.K_LEFT: True}, {pygame.K_LEFT: True}, {},
+               {}, {pygame.K_LEFT: True}):
+        f28e.step(FakeKeys(ks))
+    assert f28e.p2.state == "dash" and f28e.p2.dash_rush,         f"免费绿冲未触发: {f28e.p2.state}"
+    assert f28e.p2.drive == DRIVE_MAX, "免费绿冲不应消耗 Drive"
+    print("[28] 相位槽五件套: OK")
+
+    # 29) 三层超必杀：Lv2 / Lv3 释放、消耗与演出
+    f29 = Fight("2p", frames, bg, sfx)
+    f29.phase = ACTIVE
+    f29.p1.x, f29.p2.x = 200, 280
+    f29.p1.super = 300
+    f29.step(FakeKeys({pygame.K_d: True, pygame.K_i: True}))
+    assert f29.p1.state == "super" and f29.p1.super_level == 2,         f"Lv2 未触发: {f29.p1.super_level}"
+    assert f29.p1.super == 100, "Lv2 应消耗 2 层"
+    for _ in range(150):
+        f29.step(FakeKeys({}))
+        if f29.p2.hp < f29.p2.max_hp:
+            break
+    assert f29.p2.hp <= f29.p2.max_hp - 34, "Lv2 地裂冲击未命中"
+    f29b = Fight("2p", frames, bg, sfx)
+    f29b.phase = ACTIVE
+    f29b.p1.x, f29b.p2.x = 200, 232
+    f29b.p1.super = 300
+    f29b.step(FakeKeys({pygame.K_a: True, pygame.K_i: True}))
+    assert f29b.p1.state == "super" and f29b.p1.super_level == 3,         f"Lv3 未触发: {f29b.p1.super_level}"
+    assert f29b.p1.super == 0, "Lv3 应清空槽位"
+    for _ in range(150):
+        f29b.step(FakeKeys({}))
+        if f29b.p2.hp < f29b.p2.max_hp:
+            break
+    assert f29b.p2.hp <= f29b.p2.max_hp - 50, "Lv3 熔核天崩未命中"
+    f29c = Fight("2p", frames, bg, sfx)    # AZURE Lv3 苍穹风暴：12 连射
+    f29c.phase = ACTIVE
+    f29c.p1.x, f29c.p2.x = 140, 340
+    f29c.p2.super = 300
+    keys = FakeKeys({pygame.K_RIGHT: True, pygame.K_KP4: True})
+    f29c.step(keys)
+    assert f29c.p2.state == "super" and f29c.p2.super_level == 3,         f"AZURE Lv3 未触发: {f29c.p2.super_level}"
+    shot_frames = 0
+    for _ in range(120):
+        f29c.step(FakeKeys({}))
+        if f29c.fx.bolts:
+            shot_frames += 1
+            f29c.fx.bolts.clear()
+    assert shot_frames >= 6, f"苍穹风暴连射数不足: {shot_frames}"
+    print("[29] 三层超必杀: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

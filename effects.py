@@ -230,10 +230,10 @@ class Fx:
             b.vy = min(2.4, max(0.3, (GROUND_Y - 52 - y) / 20))
         self.bolts.append(b)
 
-    def spawn_super_bolt(self, mech, x, y, idx=0):
-        """AZURE 超必杀强化光束：放大判定，三发速度递增。"""
+    def spawn_super_bolt(self, mech, x, y, idx=0, dmg=None):
+        """AZURE 系超必杀强化光束：放大判定，多连发。"""
         b = Projectile(mech, x, y, self.bolt_sprites, big=True)
-        b.dmg = AZURE_SUPER_BOLT_DMG
+        b.dmg = AZURE_SUPER_BOLT_DMG if dmg is None else dmg
         b.vx = mech.facing * (AZURE_SUPER_BOLT_SPEED + idx * 0.35)
         self.bolts.append(b)
 

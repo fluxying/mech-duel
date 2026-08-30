@@ -5,7 +5,8 @@ import pygame
 
 from settings import (INTERNAL_W, INTERNAL_H, COLORS, ROUND_TIME,
                       ROUNDS_TO_WIN, RANGED_COST, ENERGY_MAX,
-                      GUARD_MAX, SUPER_MAX, COMBO_SCALE_STEP, COMBO_SCALE_MIN)
+                      GUARD_MAX, SUPER_MAX, COMBO_SCALE_STEP, COMBO_SCALE_MIN,
+                      DRIVE_MAX, SUPER_COST)
 from assets import get_font, SPRITE_H
 
 BAR_MARGIN = 14
@@ -14,6 +15,7 @@ BAR_H = 11
 ENERGY_H = 5
 GUARD_H = 4
 SUPER_H = 3
+DRIVE_H = 4
 
 
 class HUD:
@@ -83,15 +85,36 @@ class HUD:
         else:
             surf.fill(g_col, (x0 + BAR_W - g_w, gy, g_w, GUARD_H))
 
-        # 超必杀槽
+        # 超必杀槽（3 层：Lv1-3 依次消耗 100/200/300）
         sy = gy + GUARD_H + 2
         pygame.draw.rect(surf, COLORS["hud_bg"], (x0 - 2, sy - 1, BAR_W + 4, SUPER_H + 2))
         s_w = int(BAR_W * m.super / SUPER_MAX)
-        s_col = (255, 214, 100) if m.super >= SUPER_MAX else (200, 160, 90)
+        if m.super >= 300:
+            s_col = (255, 240, 160)
+        elif m.super >= SUPER_COST:
+            s_col = (255, 214, 100)
+        else:
+            s_col = (200, 160, 90)
         if left:
             surf.fill(s_col, (x0, sy, s_w, SUPER_H))
         else:
             surf.fill(s_col, (x0 + BAR_W - s_w, sy, s_w, SUPER_H))
+        for i in (1, 2):                  # 层级分隔刻度
+            tx = x0 + int(BAR_W * i / 3)
+            surf.fill((90, 80, 60), (tx, sy, 1, SUPER_H))
+
+        # 相位槽（Drive，6 格：OD/绿冲/逆转的资源）
+        dy = sy + SUPER_H + 2
+        pygame.draw.rect(surf, COLORS["hud_bg"], (x0 - 2, dy - 1, BAR_W + 4, DRIVE_H + 2))
+        d_w = int(BAR_W * m.drive / DRIVE_MAX)
+        d_col = (120, 230, 255) if m.drive >= 40 else (90, 130, 160)
+        if left:
+            surf.fill(d_col, (x0, dy, d_w, DRIVE_H))
+        else:
+            surf.fill(d_col, (x0 + BAR_W - d_w, dy, d_w, DRIVE_H))
+        for i in range(1, 6):             # 6 格刻度
+            tx = x0 + int(BAR_W * i / 6)
+            surf.fill((60, 70, 90), (tx, dy, 1, DRIVE_H))
 
         # 连段计数（受击方连段 ≥2 段时显示：段数 + 当前衰减倍率）
         if m.combo_count >= 2:
@@ -100,9 +123,9 @@ class HUD:
             txt = f"{m.combo_count} HITS {int(scale * 100)}%"
             img = get_font(9).render(txt, True, (255, 214, 100))
             if left:
-                surf.blit(img, (x0, 56))
+                surf.blit(img, (x0, 66))
             else:
-                surf.blit(img, (x0 + BAR_W - img.get_width(), 56))
+                surf.blit(img, (x0 + BAR_W - img.get_width(), 66))
 
         # 名字
         name = f"{m.spec['name']}·{m.spec['cn_name']}"
@@ -114,7 +137,8 @@ class HUD:
             surf.blit(img, (x0 + BAR_W - img.get_width(), y0 - 11))
 
     def _pips(self, surf, wins, left):
-        y = 10 + BAR_H + 3 + ENERGY_H + 2 + GUARD_H + 2 + SUPER_H + 2 + 4
+        y = 10 + BAR_H + 3 + ENERGY_H + 2 + GUARD_H + 2 + SUPER_H + 2 + \
+            DRIVE_H + 2 + 4
         for i in range(ROUNDS_TO_WIN):
             size = 5
             if left:

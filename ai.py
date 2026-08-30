@@ -9,12 +9,14 @@
 
 import random
 
-from settings import GUARD_MAX, SUPER_MAX, AI_DIFFICULTY
+from settings import (GUARD_MAX, SUPER_MAX, SUPER_COST, DRIVE_MAX,
+                      DRIVE_COST, AI_DIFFICULTY)
 
 PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT, PLAN_THROW, PLAN_SUPER = (
     "move", "retreat", "melee", "shoot", "block", "jump", "wait", "throw",
     "super")
-PLAN_HEAVY, PLAN_SPECIAL = "heavy", "special"
+PLAN_HEAVY, PLAN_SPECIAL, PLAN_OD, PLAN_IMPACT, PLAN_PARRY = (
+    "heavy", "special", "od", "impact", "parry")
 
 
 class AIController:
@@ -48,9 +50,13 @@ class AIController:
             o_windup = o.state == "melee" and o.t < 16
             # 自身防御槽告急 → 少格挡多跳（防被 GUARD BREAK）
             guard_low = m.guard <= GUARD_MAX * 0.35
-            if o_windup and dist < 80 and rng.random() < self.p["react_melee"]:
-                self._set_plan(PLAN_JUMP if guard_low else PLAN_BLOCK,
-                               rng.randint(16, 30))
+            if o_windup and dist < 80:
+                r = rng.random()
+                if r < self.p.get("parry_p", 0.0):
+                    self._set_plan(PLAN_PARRY, 2)   # 尝试完美格挡
+                elif r < self.p.get("parry_p", 0.0) + self.p["react_melee"]:
+                    self._set_plan(PLAN_JUMP if guard_low else PLAN_BLOCK,
+                                   rng.randint(16, 30))
             incoming = [b for b in getattr(self, "bolts_ref", [])
                         if b.owner is o and (b.x - m.x) * towards > 0
                         and abs(b.x - m.x) < 90]
@@ -89,7 +95,7 @@ class AIController:
             self._set_plan(PLAN_WAIT, rng.randint(10, 20))
             return
         # 超必杀槽满：找机会直接放（中远距离优先）
-        if m.super >= SUPER_MAX and dist > 40 and rng.random() < p["super_p"]:
+        if m.super >= SUPER_COST and dist > 40 and rng.random() < p["super_p"]:
             self._set_plan(PLAN_SUPER, 8)
             return
         if dist > 150:
@@ -118,6 +124,12 @@ class AIController:
                 self._set_plan(PLAN_MELEE, 6)
             elif rng.random() < p.get("heavy_p", 0.0):
                 self._set_plan(PLAN_HEAVY, 6)      # 重击（高伤/破防特长）
+            elif (m.drive >= DRIVE_COST and dist < 60
+                    and rng.random() < p.get("od_p", 0.0)):
+                self._set_plan(PLAN_OD, 6)         # OD 强化技
+            elif (o.state == "block" and dist < 70
+                    and rng.random() < p.get("impact_p", 0.0)):
+                self._set_plan(PLAN_IMPACT, 26)    # Drive 冲击拆防
             elif rng.random() < p["block_p"]:
                 self._set_plan(PLAN_BLOCK, rng.randint(12, 24))
             elif rng.random() < 0.5:
@@ -175,7 +187,29 @@ class AIController:
         elif self.plan == PLAN_THROW:
             inp["throw"] = True
         elif self.plan == PLAN_SUPER:
+            if m.super >= 300:      # Lv3：后方向+超杀键
+                if towards > 0:
+                    inp["left"] = True
+                else:
+                    inp["right"] = True
+            elif m.super >= 200:    # Lv2：前方向+超杀键
+                if towards > 0:
+                    inp["right"] = True
+                else:
+                    inp["left"] = True
             inp["super"] = True
+        elif self.plan == PLAN_OD:
+            if towards > 0:
+                inp["right"] = True
+            else:
+                inp["left"] = True
+            inp["melee"] = True
+            inp["ranged"] = True
+        elif self.plan == PLAN_IMPACT:
+            inp["melee"] = True
+            inp["heavy"] = True
+        elif self.plan == PLAN_PARRY:
+            inp["block"] = True
         elif self.plan == PLAN_BLOCK:
             inp["block"] = True
         elif self.plan == PLAN_JUMP:

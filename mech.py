@@ -26,7 +26,14 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       GUARD_BREAK_STUN, JUMP_BOOST,
                       BLOCK_STUN, BLOCK_PUSH, COMBO_RESET_FRAMES, combo_scale,
                       PUNISH_MULT, PUNISH_STUN_BONUS,
-                      THROW_TECH_WINDOW, MOVE_DEFS, SPECIAL_CD, RANGED_SPEED)
+                      THROW_TECH_WINDOW, MOVE_DEFS, SPECIAL_CD, RANGED_SPEED,
+                      DRIVE_MAX, DRIVE_REGEN, DRIVE_COST, DRIVE_REVERSAL_COST,
+                      DRIVE_HIT_LOSS, DRIVE_BLOCK_LOSS, DRIVE_PARRY_GAIN,
+                      DRIVE_HIT_GAIN, PARRY_WINDOW, PARRY_STAGGER,
+                      PARRY_RUSH_WINDOW, RUSH_FRAMES, RUSH_SPEED,
+                      DIM_CHARGE_MIN, DIM_CHARGE_MAX, DIM_DMG, DIM_RANGE,
+                      DIM_GUARD_MULT, REVERSAL_DEF, WALL_SPLASH_STUN,
+                      SUPER_COST)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
 from effects import Projectile
 
@@ -36,6 +43,7 @@ THROW, DASH, BACKSTEP, AIR_MELEE, THROWN = (
     "throw", "dash", "backstep", "air_melee", "thrown")
 SUPER, GBREAK = "super", "guard_break"
 HEAVY, AIR_HEAVY, SPECIAL = "heavy", "air_heavy", "special"  # MOVE_DEFS 驱动
+DIMPACT, DREVERSAL = "drive_impact", "drive_reversal"        # 相位槽技
 
 # 状态 -> 动画帧序列 [(帧名, 时长帧)]；MELEE/THROW/AIR_MELEE/SUPER 相位由 t 直接推算
 ANIMS = {
@@ -106,14 +114,24 @@ class Mech:
         self.age = 0              # 总帧数（双击检测用）
         self._prev_input = {}     # 上一帧输入（新按下检测）
         self._tap_age = {}        # 方向 -> 上次单按帧号
+        self._prev_taps = {}      # 上一帧的 _tap_age 快照（双击判定用）
         self.melee_blocked = False  # 上一次轻斩被防（被防取消依据）
         self.chain_count = 0      # 轻斩连打段数（上限 2 链）
         self.move_key = None      # 当前 MOVE_DEFS 技键（HEAVY/SPECIAL 系）
         self.move = None          # 当前技 def
         self.move_did_hit = False
         self.armor_on = False     # 霸体生效中（吃半伤不中断）
+        self.armor_left = 0       # 霸体剩余吸收段数
         self.bolt_shots_left = 0  # 特殊技待发弹数
         self.bolt_next_t = 0      # 下一发弹的帧号
+        self.drive = DRIVE_MAX    # 相位槽（6 格）
+        self.parry_window = 0     # 完美格挡判定窗剩余帧
+        self.parry_rush = 0       # 完美格挡后免费绿冲窗口剩余帧
+        self.stagger = 0          # 被完美格挡后的踉跄帧
+        self.dash_rush = False    # 当前冲刺是否为 Drive Rush
+        self.dim_t0 = None        # Drive 冲击出手帧（None=蓄力中）
+        self.super_level = 1      # 本局超必杀等级（1-3）
+        self.gb_stun = GUARD_BREAK_STUN  # 破防/墙崩硬直帧（墙崩较短）
         self.input = {k: False for k in
                       ("left", "right", "jump", "block", "melee", "heavy",
                        "ranged", "throw", "super")}
@@ -185,10 +203,12 @@ class Mech:
         return self.x + self.facing * 21, self.y - 38
 
     def super_hitbox(self):
-        """GARNET 超必杀冲撞判定盒（AZURE 为射击型，无近身判定）。"""
+        """GARNET 系超必杀冲撞判定盒（AZURE/VERDANT 为射击型，无近身判定）。"""
         if self.state != SUPER or self.spec_key != "garnet":
             return None
-        if not (GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]):
+        lv = self.spec["super_levels"][self.super_level]
+        a0, a1 = lv["active"]
+        if not (a0 <= self.t < a1):
             return None
         f = self.facing
         x0 = self.x + f * 4
@@ -197,17 +217,52 @@ class Mech:
         return pygame.Rect(int(left), int(self.y) - 56, int(right - left), 56)
 
     # ------------------------------------------------ MOVE_DEFS 出招（数据驱动）
-    def _start_move(self, state, key):
-        """按表出招：HEAVY / AIR_HEAVY / SPECIAL 共用入口。"""
-        d = MOVE_DEFS[self.spec_key][key]
+    def _start_move(self, state, key, d=None, armor_left=0):
+        """按表出招：HEAVY / AIR_HEAVY / SPECIAL / DREVERSAL 共用入口。"""
+        d = d or MOVE_DEFS[self.spec_key][key]
         self.move_key = key
         self.move = d
         self.move_did_hit = False
         self.armor_on = False
+        self.armor_left = armor_left
         bd = d.get("bolt")
         self.bolt_shots_left = bd.get("shots", 1) if bd else 0
         self.bolt_next_t = d["windup"] + 1 if bd else 0
         self._enter(state)
+
+    def _dbl_fwd(self):
+        """本帧是否构成「双击前方向」（用于取消窗内触发 Drive Rush）。"""
+        fwd_dir = 1 if self.facing == 1 else -1
+        last = self._prev_taps.get(fwd_dir)
+        return last is not None and self.age - last <= TAP_WINDOW
+
+    def _drive_rush(self, fx, free=False):
+        """绿冲：免费（完美格挡后）或消耗 1 格 Drive。"""
+        if free:
+            self.parry_rush = 0
+        else:
+            self.drive = max(0, self.drive - DRIVE_COST)
+        self._enter(DASH)
+        self.dash_rush = True
+        fx.dust(self.x, self.y, n=5)
+
+    def _try_super(self):
+        """按超必杀键：依据方向与槽位选择 Lv1/2/3。成功返回 True。"""
+        inp = self.input
+        if not inp["super"] or self.super < SUPER_COST:
+            return False
+        fwd = (self.facing == 1 and inp["right"]) or \
+              (self.facing == -1 and inp["left"])
+        back = (self.facing == 1 and inp["left"]) or \
+               (self.facing == -1 and inp["right"])
+        lvl = 3 if (back and self.super >= 300) else \
+            2 if (fwd and self.super >= 200) else 1
+        self.super -= SUPER_COST * lvl
+        self.super_level = lvl
+        self._enter(SUPER)
+        self.super_did_hit = False
+        self.super_pending = lvl         # 通知 Fight 播放对应等级演出
+        return True
 
     def move_hitbox(self):
         """HEAVY / AIR_HEAVY / SPECIAL 判定盒（读 move def，判定相内有效）。"""
@@ -222,6 +277,19 @@ class Mech:
         x1 = self.x + f * d.get("range", 40)
         left, right = sorted((x0, x1))
         return pygame.Rect(int(left), int(self.y) - 46, int(right - left), 30)
+
+    def dim_hitbox(self):
+        """Drive 冲击出手相判定盒。"""
+        if self.state != DIMPACT or self.dim_t0 is None:
+            return None
+        rel = self.dim_t0
+        if not (rel <= self.t < rel + 6):
+            return None
+        f = self.facing
+        x0 = self.x + f * 4
+        x1 = self.x + f * DIM_RANGE
+        left, right = sorted((x0, x1))
+        return pygame.Rect(int(left), int(self.y) - 56, int(right - left), 56)
 
     def _special_cmd(self):
         """识别 Modern 特殊技指令（方向+光束键），返回 move key 或 None。"""
@@ -271,6 +339,11 @@ class Mech:
             self.wake_invuln -= 1
         if self.tech_window > 0:
             self.tech_window -= 1
+        if self.parry_window > 0:
+            self.parry_window -= 1
+        if self.parry_rush > 0:
+            self.parry_rush -= 1
+        self.drive = min(DRIVE_MAX, self.drive + DRIVE_REGEN)
         if self.combo_count > 0:          # 脱离受击超时：连段重置
             self.combo_timer += 1
             if self.combo_timer > COMBO_RESET_FRAMES:
@@ -281,15 +354,22 @@ class Mech:
 
         inp = self.input
         st = self.state
-        # 新按下检测（供双击冲刺/拆投窗用），随后快照本帧输入
+        # 新按下检测（供双击冲刺/拆投窗/完美格挡用），随后快照本帧输入
         fresh = {k for k, v in inp.items() if v and not self._prev_input.get(k)}
         if "throw" in fresh:
             self.tech_window = THROW_TECH_WINDOW   # 按投即置位拆投窗
+        if "block" in fresh:
+            self.parry_window = PARRY_WINDOW       # 按防即置位完美格挡窗
+        self._prev_taps = dict(self._tap_age)      # 双击判定取上一次按下帧
+        for dname in ("left", "right"):
+            if dname in fresh:
+                self._tap_age[-1 if dname == "left" else 1] = self.age
         self._prev_input = dict(inp)
 
         # 面向对手（动作进行中锁定朝向）
         if st not in (MELEE, SHOOT, THROW, DASH, BACKSTEP, AIR_MELEE, THROWN,
-                      SUPER, GBREAK, KO, HEAVY, AIR_HEAVY, SPECIAL):
+                      SUPER, GBREAK, KO, HEAVY, AIR_HEAVY, SPECIAL,
+                      DIMPACT, DREVERSAL):
             self.facing = 1 if opponent.x >= self.x else -1
 
         if st == KO:
@@ -318,31 +398,64 @@ class Mech:
             self._physics(fx)
             return
 
-        if st == GBREAK:                  # 防御崩坏：大硬直，无法防御
+        if st == GBREAK:                  # 防御崩坏/墙崩：大硬直，无法防御
             self.t += 1
             self.vx *= 0.85
-            if self.t >= GUARD_BREAK_STUN and self.grounded:
+            if self.t >= self.gb_stun and self.grounded:
                 self._enter(IDLE)
             self._physics(fx)
             return
 
-        if st == SUPER:                   # 超必杀（发动演出由 Fight 处理）
+        if st == SUPER:                   # 超必杀（等级由 super_level 决定）
+            lv = self.spec["super_levels"][self.super_level]
             self.t += 1
-            if self.spec_key == "garnet":
-                # 熔核冲击：判定相高速突进
-                self.vx = (self.facing * 6.0
-                           if GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]
-                           else 0)
+            if "active" in lv:            # GARNET 系：判定相高速突进
+                a0, a1 = lv["active"]
+                self.vx = self.facing * lv["rush"] if a0 <= self.t < a1 else 0
+                if lv.get("wave") and self.t == a1 + 2:
+                    self._fire_wave(fx)   # Lv2 地裂冲击波
+            elif "shots" in lv and lv.get("drift"):
+                self.vx = self.facing * lv["drift"]   # AZURE Lv2 移动齐射
+                if self.t in lv["shots"]:
+                    self._fire_super_shot(fx, sfx)
             elif self.spec_key == "verdant":
-                # 翠暴轰炸：原地呼叫两发弧线榴弹，砸向对手当前位置
                 self.vx = 0
-                if self.t in VERDANT_SUPER_SHOTS:
+                if self.t in lv["shots"]:
                     self._fire_super_arc(opponent, fx, sfx)
             else:
                 self.vx = 0
-                if self.t in AZURE_SUPER_SHOTS:
+                if self.t in lv["shots"]:
                     self._fire_super_shot(fx, sfx)
-            if self.t >= SUPER_TOTAL:
+            if self.t >= lv["total"]:
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == DIMPACT:                 # Drive 冲击：蓄力 → 出手（全程霸体）
+            self.t += 1
+            self.armor_on = self.armor_left > 0
+            held = inp["melee"] and inp["heavy"]
+            if self.dim_t0 is None:       # 蓄力相
+                self.vx = 0
+                if ((not held and self.t >= DIM_CHARGE_MIN)
+                        or self.t >= DIM_CHARGE_MAX):
+                    self.dim_t0 = self.t  # 出手
+            else:                         # 出手 + 收招
+                rel = self.dim_t0
+                self.vx = self.facing * 1.6 if rel <= self.t < rel + 6 else 0
+                if self.t >= rel + 26:
+                    self.armor_on = False
+                    self.dim_t0 = None
+                    self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == DREVERSAL:               # 逆转反技（读 REVERSAL_DEF）
+            d = self.move
+            self.t += 1
+            w0, a1 = d["windup"], d["windup"] + d["active"]
+            self.vx = self.facing * 1.0 if w0 <= self.t < a1 else 0
+            if self.t >= a1 + d["recover"]:
                 self._enter(IDLE)
             self._physics(fx)
             return
@@ -367,11 +480,11 @@ class Mech:
                     self._enter(SHOOT)         # 轻斩取消 → 光束
                     self._physics(fx)
                     return
-                if inp["super"] and self.super >= SUPER_MAX:
-                    self.super = 0
-                    self._enter(SUPER)
-                    self.super_did_hit = False
-                    self.super_pending = True
+                if inp["super"] and self._try_super():
+                    self._physics(fx)
+                    return
+                if self._dbl_fwd():            # 取消窗内双击前 → 绿冲
+                    self._drive_rush(fx)
                     self._physics(fx)
                     return
                 if inp["heavy"]:               # 目标连段：轻 → 重
@@ -513,11 +626,11 @@ class Mech:
                     self._start_move(SPECIAL, key)
                     self._physics(fx)
                     return
-                if inp["super"] and self.super >= SUPER_MAX:
-                    self.super = 0
-                    self._enter(SUPER)
-                    self.super_did_hit = False
-                    self.super_pending = True
+                if inp["super"] and self._try_super():
+                    self._physics(fx)
+                    return
+                if self._dbl_fwd():            # 取消窗内双击前 → 绿冲
+                    self._drive_rush(fx)
                     self._physics(fx)
                     return
             if self.t >= a1 + d["recover"]:
@@ -551,11 +664,11 @@ class Mech:
                 self.bolt_shots_left -= 1
                 self.bolt_next_t += d["bolt"].get("interval", 0)
             if self.grounded and self.move_did_hit and self.t >= a1:
-                if inp["super"] and self.super >= SUPER_MAX:
-                    self.super = 0        # 特殊技命中取消 → 超必杀
-                    self._enter(SUPER)
-                    self.super_did_hit = False
-                    self.super_pending = True
+                if inp["super"] and self._try_super():   # 特殊技命中 → 超必杀
+                    self._physics(fx)
+                    return
+                if self._dbl_fwd():            # 取消窗内双击前 → 绿冲
+                    self._drive_rush(fx)
                     self._physics(fx)
                     return
             if self.t >= a1 + d["recover"]:
@@ -568,18 +681,38 @@ class Mech:
             return
 
         # ---- 可自由行动：IDLE / WALK / JUMP / BLOCK ----
+        if self.stagger > 0:              # 被完美格挡后的踉跄
+            self.stagger -= 1
+            self.vx *= 0.85
+            self._physics(fx)
+            return
+
         if st == BLOCK and self.block_stun > 0:   # 受防硬直：防御中无法行动
             self.block_stun -= 1
             self.vx *= 0.85
             self._physics(fx)
             return
 
-        # 超必杀：槽满 + 专用键（最高优先级），发动即清空槽位
-        if (inp["super"] and self.grounded and self.super >= SUPER_MAX):
-            self.super = 0
-            self._enter(SUPER)
-            self.super_did_hit = False
-            self.super_pending = True    # 通知 Fight 播放发动演出
+        # Drive 冲击：轻+重同按（含受防硬直中的拆招反击）
+        if "melee" in fresh and "heavy" in fresh and self.grounded \
+                and st in (IDLE, WALK, BLOCK):
+            self.dim_t0 = None
+            self.armor_left = 1           # 蓄力全程吸收一段伤害
+            self._enter(DIMPACT)
+            self._physics(fx)
+            return
+
+        # 超必杀：依据方向与槽位选择 Lv1/2/3（最高优先级）
+        if self.grounded and self._try_super():
+            self._physics(fx)
+            return
+
+        # OD 强化技：前方向 + 轻+束同按，耗 1 格 Drive
+        fwd_held0 = (self.facing == 1 and inp["right"]) or                     (self.facing == -1 and inp["left"])
+        if (fwd_held0 and "melee" in fresh and "ranged" in fresh
+                and self.grounded and self.drive >= DRIVE_COST):
+            self.drive -= DRIVE_COST
+            self._start_move(SPECIAL, "od")
             self._physics(fx)
             return
 
@@ -587,12 +720,15 @@ class Mech:
         if (self.grounded and st in (IDLE, WALK)
                 and (("left" in fresh) ^ ("right" in fresh))):
             dirn = -1 if "left" in fresh else 1
-            last = self._tap_age.get(dirn)
+            last = self._prev_taps.get(dirn)
             if last is not None and self.age - last <= TAP_WINDOW:
-                self._tap_age[dirn] = None
+                self._prev_taps[dirn] = None
                 forward = 1 if opponent.x >= self.x else -1
                 if dirn == forward:
-                    self._enter(DASH)
+                    if self.parry_rush > 0:       # 完美格挡后：免费绿冲
+                        self._drive_rush(fx, free=True)
+                    else:
+                        self._enter(DASH)
                 else:
                     self._enter(BACKSTEP)
                 fx.dust(self.x, self.y, n=4)
@@ -604,6 +740,13 @@ class Mech:
             if st != BLOCK:
                 self._enter(BLOCK)
             self.vx = 0
+            fwd_held = (self.facing == 1 and inp["right"]) or \
+                       (self.facing == -1 and inp["left"])
+            if (fwd_held and "heavy" in fresh
+                    and self.drive >= DRIVE_REVERSAL_COST):
+                # 逆转反技：防御中 前方向+重，耗 2 格 Drive
+                self.drive -= DRIVE_REVERSAL_COST
+                self._start_move(DREVERSAL, "reversal", d=REVERSAL_DEF)
         elif "heavy" in fresh and self.grounded:
             # 重击三变体：方向+重 = 前重（贴脸突进）/ 后重（对空/扫击）
             fwd = (self.facing == 1 and inp["right"]) or \
@@ -712,25 +855,31 @@ class Mech:
         sfx.play("shoot")
 
     def _fire_super_shot(self, fx, sfx):
-        """AZURE 超必杀「苍蓝齐射」：三连强化光束之一。"""
-        idx = AZURE_SUPER_SHOTS.index(self.t)
+        """AZURE 系超必杀齐射（按当前等级 def 发射强化光束）。"""
         mx, my = self.muzzle_pos()
-        fx.spawn_super_bolt(self, mx, my, idx)
+        dmg = self.spec["super_levels"][self.super_level]["dmg"]
+        fx.spawn_super_bolt(self, mx, my, self.t % 3, dmg=dmg)
         fx.muzzle_flash(mx, my, self.facing)
         fx.shake(4)
         sfx.play("shoot")
 
     def _fire_super_arc(self, opponent, fx, sfx):
-        """VERDANT 超必杀「翠暴轰炸」：弧线榴弹，按对手当前位置解算落点。"""
-        idx = VERDANT_SUPER_SHOTS.index(self.t)
+        """VERDANT 系超必杀：弧线榴弹，按对手当前位置解算落点。"""
+        lv = self.spec["super_levels"][self.super_level]
+        idx = lv["shots"].index(self.t)
         dx = opponent.x - self.x
         vx = max(-4.2, min(4.2, dx / 48.0)) + (idx * 2 - 1) * 0.30
         sx, sy = self.x + self.facing * 6, self.y - 58
-        fx.spawn_arc_bolt(self, sx, sy, vx, VERDANT_SUPER_VY,
-                          VERDANT_SUPER_BOLT_DMG)
+        fx.spawn_arc_bolt(self, sx, sy, vx, VERDANT_SUPER_VY, lv["dmg"])
         fx.muzzle_flash(sx, sy, self.facing)
         fx.shake(3)
         sfx.play("shoot")
+
+    def _fire_wave(self, fx):
+        """GARNET Lv2「地裂冲击」：命中后贴地冲击波二段。"""
+        sx, sy = self.x + self.facing * 30, GROUND_Y - 10
+        fx.spawn_arc_bolt(self, sx, sy, self.facing * 2.2, 0.0, 12)
+        fx.shake(4)
 
     def take_damage(self, dmg, from_dir, fx, sfx, heavy=False,
                     unblockable=False, launch=False, punish=False,
@@ -766,10 +915,19 @@ class Mech:
             return "armor"
 
         if self.state == BLOCK and not unblockable:
+            if self.parry_window > 0:                    # 完美格挡：弹开
+                self.parry_window = 0
+                self.parry_rush = PARRY_RUSH_WINDOW      # 免费绿冲窗口
+                self.drive = min(DRIVE_MAX, self.drive + DRIVE_PARRY_GAIN)
+                fx.block_spark(self.x + self.facing * 14, self.y - 34)
+                fx.callout(self.x, self.y - 74, "PERFECT", (120, 230, 255))
+                sfx.play("block")
+                return "parried"
             real = max(1, round(dmg * BLOCK_REDUCE))     # 格挡削血（chip）
             self.hp = max(0, self.hp - real)
             self.guard -= (GUARD_GAIN_MELEE * guard_mult if heavy
                            else GUARD_GAIN_BOLT)
+            self.drive = max(0, self.drive - DRIVE_BLOCK_LOSS)
             self.block_stun = BLOCK_STUN                 # 受防硬直
             self.vx = from_dir * BLOCK_PUSH
             self.combo_count = 0                         # 被防重置连段
@@ -780,6 +938,7 @@ class Mech:
             if self.guard <= 0:              # GUARD BREAK：防御崩坏
                 self.guard = 0
                 self.block_stun = 0
+                self.gb_stun = GUARD_BREAK_STUN
                 self.state = GBREAK
                 self.t = 0
                 fx.shake(6)
@@ -798,6 +957,7 @@ class Mech:
         self.hp = max(0, self.hp - dmg)
         self.flash = 5
         self.block_stun = 0
+        self.drive = max(0, self.drive - DRIVE_HIT_LOSS)
         self.vx = from_dir * self.spec["knockback"] * (1.0 if heavy else 0.7)
         fx.damage_number(self.x, self.y - 62, dmg)
         fx.sparks(self.x + from_dir * -8, self.y - 34, from_dir,
@@ -850,7 +1010,12 @@ class Mech:
             return "atk2"
         if st == AIR_MELEE:
             return "atk1" if self.t < AIR_MELEE_ACTIVE[1] else "atk2"
-        if st in (HEAVY, AIR_HEAVY, SPECIAL):    # MOVE_DEFS 驱动：按相位取帧
+        if st == DIMPACT:                 # 冲击：蓄力/出手/收招
+            if self.dim_t0 is None:
+                return "atk0"
+            return "atk1" if self.t < self.dim_t0 + 6 else "atk2"
+        if st in (HEAVY, AIR_HEAVY, SPECIAL, DREVERSAL):
+            # MOVE_DEFS 驱动：按相位取帧
             d = self.move or {}
             w0 = d.get("windup", 9)
             a1 = w0 + d.get("active", 5)
@@ -862,13 +1027,16 @@ class Mech:
         if st == SHOOT:
             return "shoot"
         if st == SUPER:
-            if self.spec_key == "garnet":
-                if GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]:
+            lv = self.spec["super_levels"][self.super_level]
+            if "active" in lv:            # GARNET 系冲撞
+                a0, a1 = lv["active"]
+                if a0 <= self.t < a1:
                     return "atk1"
-                return "atk0" if self.t < GARNET_SUPER_ACTIVE[0] else "atk2"
+                return "atk0" if self.t < a0 else "atk2"
+            first = lv["shots"][0]
             if self.spec_key == "verdant":
-                return "atk0" if self.t < VERDANT_SUPER_SHOTS[0] else "shoot"
-            return "shoot" if self.t >= AZURE_SUPER_SHOTS[0] else "atk0"
+                return "atk0" if self.t < first else "shoot"
+            return "shoot" if self.t >= first else "atk0"
         if st == GBREAK:
             return "hurt"
         seq = ANIMS[st]
