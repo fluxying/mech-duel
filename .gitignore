@@ -3,5 +3,6 @@
 /build/
 /dist/
 *.spec
-/.workbuddy//keymap.json
+/.workbuddy/
+/keymap.json
 /stats.json

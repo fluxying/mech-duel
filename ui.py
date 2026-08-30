@@ -201,14 +201,18 @@ DIFF_CN = {"easy": "简单", "normal": "普通", "hard": "困难"}
 def draw_menu(surf, bg, frames, t, difficulty="normal",
               stage_name="废墟月夜", stats=None):
     surf.blit(bg, (0, 0))
-    # 三机甲登场姿势（贴两侧与底部，避免与说明文字重叠）
-    idle_p1 = frames["p1"]["idle"][1]
-    idle_p2 = frames["p2"]["idle"][-1]
-    idle_p3 = frames["p3"]["idle"][-1]
+    # 机甲登场姿势（贴两侧与底部，按机体数自动排布，避免与说明文字重叠）
+    from settings import MECH_ORDER, MECH_SPECS
     bob = 2 if (t // 22) % 2 else 0
-    surf.blit(idle_p1, (10, 236 - SPRITE_H + bob))
-    surf.blit(idle_p2, (480 - 10 - idle_p2.get_width(), 236 - SPRITE_H + bob))
-    surf.blit(idle_p3, (66, 236 - SPRITE_H + 4 - bob))
+    pals = [MECH_SPECS[k]["palette"] for k in MECH_ORDER]
+    half = (len(pals) + 1) // 2
+    for i, pal in enumerate(pals):
+        img = frames[pal]["idle"][1 if i == 0 else -1]
+        left_side = i < half
+        k = i if left_side else i - half
+        x = (8 + k * 52) if left_side else             (INTERNAL_W - 8 - img.get_width() - k * 52)
+        y = 236 - SPRITE_H + (bob if k % 2 == 0 else 4 - bob)
+        surf.blit(img, (x, y))
 
     fnt_big = get_font(34)
     title = fnt_big.render("MECH DUEL", True, (245, 240, 225))
@@ -228,17 +232,18 @@ def draw_menu(surf, bg, frames, t, difficulty="normal",
         ("[3] 训练模式    FREE TRAINING", (230, 230, 240)),
         ("[4] AI 演示     CPU  VS  CPU", (230, 230, 240)),
         ("[5] 按键设置    KEY CONFIG", (230, 230, 240)),
+        ("[6] 街机模式    连胜 3 局通关", (255, 200, 120)),
         (f"[E] 场地　{stage_name}", (150, 220, 170)),
     ]
-    y0 = 100
+    y0, step = 96, 15
     for i, (txt, col) in enumerate(rows):
         img = fnt_opt.render(txt, True, col)
-        surf.blit(img, (cx - img.get_width() // 2, y0 + i * 16))
+        surf.blit(img, (cx - img.get_width() // 2, y0 + i * step))
     blink = (t // 30) % 2 == 0
     if blink:
-        hint = fnt_opt.render("按 1-4 选择 · E 切换场地 · TAB 难度 · M 静音",
+        hint = fnt_opt.render("按 1-6 选择 · E 场地 · TAB 难度 · M 静音",
                               True, (255, 214, 100))
-        surf.blit(hint, (cx - hint.get_width() // 2, y0 + 6 * 16 + 4))
+        surf.blit(hint, (cx - hint.get_width() // 2, y0 + 7 * step + 2))
 
     if stats and stats.get("matches"):
         fnt_s = get_font(9)
@@ -281,7 +286,8 @@ def draw_select(surf, bg, frames, sel, t):
                          True, (255, 214, 100))
         surf.blit(d, (cx - d.get_width() // 2, 52))
 
-    centers = [110, 240, 370]
+    n = len(MECH_ORDER)
+    centers = [int(INTERNAL_W * (i + 0.5) / n) for i in range(n)]
     card = pygame.Rect(0, 0, 96, 118)
     fnt_nm = get_font(11)
     fnt_cn = get_font(9)
@@ -330,6 +336,8 @@ def draw_select(surf, bg, frames, sel, t):
         hint = "P1: A/D 选择 J 确认      P2: ←/→ 选择 小键盘1 确认      ESC 返回"
     elif sel.mode == "ai":
         hint = "P1: A/D 选择 J 确认      P2 由 CPU 随机体随机      ESC 返回"
+    elif sel.mode == "arcade":
+        hint = "P1: A/D 选择 J 确认      连胜 3 局通关      ESC 返回"
     else:
         hint = "P1: A/D 选择 J 确认      假人随机使用机体      ESC 返回"
     img = fnt_h.render(hint, True, (235, 220, 190))
@@ -383,7 +391,8 @@ def draw_keyconfig(surf, bg, rows, idx, waiting, t):
     surf.blit(note, (cx - note.get_width() // 2, 244))
 
 
-def draw_victory(surf, bg, winner_spec, wins1, wins2, has_replay=False):
+def draw_victory(surf, bg, winner_spec, wins1, wins2, has_replay=False,
+                 arcade_result=None, arcade_stage=0):
     surf.blit(bg, (0, 0))
     fnt = get_font(24)
     text = f"{winner_spec['name']} {winner_spec['cn_name']} WINS!"
@@ -395,10 +404,18 @@ def draw_victory(surf, bg, winner_spec, wins1, wins2, has_replay=False):
     fnt2 = get_font(12)
     score = fnt2.render(f"{wins1} - {wins2}", True, (235, 235, 245))
     surf.blit(score, (cx - score.get_width() // 2, 126))
+    if arcade_result:
+        fnt_a = get_font(14)
+        if arcade_result == "clear":
+            line, col = "★ 街机模式 通关 ★", (255, 214, 100)
+        else:
+            line, col = f"街机挑战失败（通过 {arcade_stage}/3）", (200, 200, 220)
+        img = fnt_a.render(line, True, col)
+        surf.blit(img, (cx - img.get_width() // 2, 144))
     blink = (pygame.time.get_ticks() // 400) % 2 == 0
     if blink:
         fnt3 = get_font(11)
         tip = fnt3.render("R 再来一局    ESC 返回菜单" +
                           ("    V 回放本局" if has_replay else ""),
                           True, (230, 230, 240))
-        surf.blit(tip, (cx - tip.get_width() // 2, 160))
+        surf.blit(tip, (cx - tip.get_width() // 2, 172))

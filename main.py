@@ -17,6 +17,7 @@ import sys
 import pygame
 
 from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
+                      AI_LEVELS, MECH_SPECS,
                       P1_KEYS, P2_KEYS, DEFAULT_P1_KEYS, DEFAULT_P2_KEYS,
                       load_keymap, save_keymap, MECH_ORDER, ROUND_TIME,
                       ROUNDS_TO_WIN, KO_SLOW_FRAMES, HITSTOP_FRAMES,
@@ -39,6 +40,8 @@ from assets import (build_mech_frames, build_background, get_font,
 from mech import Mech, IDLE
 from effects import Fx
 from ai import AIController
+from scene_flow import (InputMux, PadMap, SelectState, KeyConfigState,
+                        demo_pair, load_stats, save_stats)
 from sfx import Sfx
 from ui import (HUD, banner, draw_menu, draw_victory, draw_select,
                 draw_keyconfig)
@@ -47,7 +50,6 @@ MENU, SELECT, FIGHT, VICTORY, KEYCONFIG = (
     "menu", "select", "fight", "victory", "keyconfig")
 INTRO, ACTIVE, SLOW, REPLAY, ROUND_END = (
     "intro", "active", "slow", "replay", "round_end")
-AI_LEVELS = ("easy", "normal", "hard")     # 菜单 TAB 轮换顺序
 
 INTRO_FRAMES = 150
 ROUND_END_FRAMES = 100
@@ -61,78 +63,6 @@ class FakeKeys:
 
     def __getitem__(self, keycode):
         return self.pressed.get(keycode, False)
-
-
-class InputMux:
-    """键盘 + 手柄合并输入源（接口兼容 key.get_pressed() 的取下标用法）。"""
-
-    def __init__(self, keys, pads):
-        self.keys = keys
-        self.pads = pads          # 每个手柄一个 {键码: bool}
-
-    def __getitem__(self, keycode):
-        if self.keys[keycode]:
-            return True
-        for pad in self.pads:
-            if pad.get(keycode):
-                return True
-        return False
-
-
-class PadMap:
-    """手柄映射：第一个手柄 → P1，第二个 → P2。无需配置。
-    十字键/左摇杆 移动+跳+防，按钮 0/1/2/3 = 斩/束/投/超，4=防御 5=跳。"""
-
-    BTN = {"melee": 0, "ranged": 1, "throw": 2, "super": 3, "block": 4,
-           "jump": 5, "heavy": 6}
-
-    def __init__(self):
-        self.joys = []
-        try:
-            pygame.joystick.init()
-            for i in range(pygame.joystick.get_count()):
-                self.joys.append(pygame.joystick.Joystick(i))
-        except Exception:
-            self.joys = []
-
-    def rumble(self, low, high, ms):
-        """手柄震动：命中轻震 / 破防中震 / KO 长震。无手柄/设备不支持时静默。"""
-        for joy in self.joys:
-            try:
-                joy.rumble(low, high, ms)
-            except Exception:
-                pass
-
-    def poll(self, keymaps):
-        """按玩家键位表把手柄状态翻译成 {键码: bool} 列表。"""
-        outs = [{} for _ in keymaps]
-        for pi, joy in enumerate(self.joys[:len(keymaps)]):
-            km = keymaps[pi]
-            out = outs[pi]
-            try:
-                ax = joy.get_axis(0) if joy.get_numaxes() > 0 else 0.0
-                ay = joy.get_axis(1) if joy.get_numaxes() > 1 else 0.0
-                hat = joy.get_hat(0) if joy.get_numhats() > 0 else (0, 0)
-
-                def press(act):
-                    code = km.get(act)
-                    if code is not None:
-                        out[code] = True
-
-                if ax < -0.5 or hat[0] < 0:
-                    press("left")
-                if ax > 0.5 or hat[0] > 0:
-                    press("right")
-                if ay < -0.5 or hat[1] < 0:
-                    press("jump")
-                if ay > 0.5 or hat[1] > 0:
-                    press("block")
-                for act, idx in self.BTN.items():
-                    if joy.get_numbuttons() > idx and joy.get_button(idx):
-                        press(act)
-            except Exception:
-                pass
-        return outs
 
 
 class QuietFx(Fx):
@@ -169,38 +99,22 @@ class QuietFx(Fx):
         pass
 
 
-def load_stats():
-    """战绩存档：{matches, wins{机甲:数}, picks{机甲:数}}。损坏即重置。"""
-    import json
-    try:
-        with open(STATS_FILE, encoding="utf-8") as f:
-            d = json.load(f)
-        if isinstance(d, dict) and "matches" in d:
-            d.setdefault("wins", {})
-            d.setdefault("picks", {})
-            return d
-    except Exception:
-        pass
-    return {"matches": 0, "wins": {}, "picks": {}}
+def arcade_next(arcade, player_won):
+    """街机模式流程推进。返回 ("next", kwargs) / ("clear", None) / ("fail", None)。
 
-
-def save_stats(stats):
-    import json
-    try:
-        with open(STATS_FILE, "w", encoding="utf-8") as f:
-            json.dump(stats, f, ensure_ascii=False)
-    except Exception:
-        pass
+    arcade = {"m1": 玩家机体, "stage": 当前序号, "opps": [(机体, 难度) ×3]}
+    """
+    if not player_won:
+        return "fail", None
+    arcade["stage"] += 1
+    if arcade["stage"] >= len(arcade["opps"]):
+        return "clear", None
+    m2, diff = arcade["opps"][arcade["stage"]]
+    return "next", {"m2": m2, "difficulty": diff, "stage": arcade["stage"]}
 
 
 def _seeded_rng(seed):
     return random.Random(seed) if seed is not None else random.Random()
-
-
-def demo_pair(i):
-    """AI 演示自动轮换：第 i 局的 (机体1, 机体2, 难度)。"""
-    return (MECH_ORDER[i % 3], MECH_ORDER[(i // 3 + 1) % 3],
-            AI_LEVELS[i % 3])
 
 
 class Fight:
@@ -208,10 +122,11 @@ class Fight:
 
     def __init__(self, mode, frames, bg, sfx, m1="garnet", m2="azure",
                  difficulty="normal", seed=None, quiet=False, pads=None,
-                 record_script=False, scripted=None):
+                 record_script=False, scripted=None, intro_sub=None):
         self.mode = mode          # "2p" | "ai" | "cpu" | "demo" | "training"
         self.training = mode == "training"
         self.difficulty = difficulty
+        self.intro_sub = intro_sub     # 开局横幅副标题（街机关卡标签等）
         self.pads = pads             # 手柄震动（run_window 注入，可为 None）
         self.frames = frames
         self.bg = bg
@@ -695,7 +610,8 @@ class Fight:
                        sub="F1 判定框 · F2 假人格挡 · R 重置 · ESC 菜单")
             elif self.phase_t < INTRO_FRAMES - 45:
                 banner(frame, f"ROUND {self.round_no}",
-                       sub=f"{self.p1.spec['name']} vs {self.p2.spec['name']}")
+                       sub=self.intro_sub or
+                       f"{self.p1.spec['name']} vs {self.p2.spec['name']}")
             else:
                 banner(frame, "FIGHT!", pulse=True)
         elif self.banner_text:
@@ -787,100 +703,6 @@ class Fight:
 
 # ================================================================ 选人 / 按键设置
 
-SEL_ACTS = ("left", "right", "jump", "block", "melee", "heavy", "ranged",
-            "throw", "super")
-
-
-class SelectState:
-    """选人界面状态机（mode = "2p" | "ai" | "training"）。
-
-    handle(key) 返回 ("start", (m1, m2)) / ("back", None) / (None, None)；
-    ai/training 模式下 P2（CPU/假人）由随机源抽取机体。
-    """
-
-    def __init__(self, mode, difficulty="normal", rng=None):
-        self.mode = mode
-        self.difficulty = difficulty
-        self.cur = [0, 0]          # [P1 游标, P2 游标]（MECH_ORDER 下标）
-        self.locked = [False, False]
-        self.rng = rng if rng is not None else random
-
-    def handle(self, key):
-        if key == pygame.K_ESCAPE:
-            return "back", None
-        p2_active = self.mode == "2p"
-        if not self.locked[0]:
-            if key == P1_KEYS["left"]:
-                self.cur[0] = (self.cur[0] - 1) % len(MECH_ORDER)
-            elif key == P1_KEYS["right"]:
-                self.cur[0] = (self.cur[0] + 1) % len(MECH_ORDER)
-            elif key == P1_KEYS["melee"]:
-                self.locked[0] = True
-        if p2_active and not self.locked[1]:
-            if key == P2_KEYS["left"]:
-                self.cur[1] = (self.cur[1] - 1) % len(MECH_ORDER)
-            elif key == P2_KEYS["right"]:
-                self.cur[1] = (self.cur[1] + 1) % len(MECH_ORDER)
-            elif key == P2_KEYS["melee"]:
-                self.locked[1] = True
-        if self.locked[0] and (self.locked[1] or not p2_active):
-            m1 = MECH_ORDER[self.cur[0]]
-            m2 = (MECH_ORDER[self.cur[1]] if p2_active
-                  else self.rng.choice(MECH_ORDER))
-            return "start", (m1, m2)
-        return None, None
-
-
-class KeyConfigState:
-    """按键重映射界面状态：行游标 + 等待按键；同玩家键位冲突自动交换。
-
-    handle(key) 返回 "back"（ESC）/ "changed"（发生改键或恢复默认）/ None。
-    持久化由调用方在 "changed" 时 save_keymap()。
-    """
-
-    def __init__(self):
-        self.idx = 0
-        self.waiting = False
-
-    def rows(self):
-        out = []
-        for who, km in (("P1", P1_KEYS), ("P2", P2_KEYS)):
-            for act in SEL_ACTS:
-                out.append((who, act, pygame.key.name(km[act])))
-        return out
-
-    def handle(self, key):
-        if self.waiting:               # 等待绑定：任意键生效，ESC 取消
-            self.waiting = False
-            if key == pygame.K_ESCAPE:
-                return None
-            who, act, _ = self.rows()[self.idx]
-            km = P1_KEYS if who == "P1" else P2_KEYS
-            old = km[act]
-            for other in SEL_ACTS:     # 该键已被同玩家其他动作占用 → 互换
-                if other != act and km[other] == key:
-                    km[other] = old
-            km[act] = key
-            return "changed"
-        col, row = self.idx // len(SEL_ACTS), self.idx % len(SEL_ACTS)
-        if key == pygame.K_UP:
-            row = (row - 1) % len(SEL_ACTS)
-        elif key == pygame.K_DOWN:
-            row = (row + 1) % len(SEL_ACTS)
-        elif key in (pygame.K_LEFT, pygame.K_RIGHT):
-            col = 1 - col
-        elif key == pygame.K_RETURN:
-            self.waiting = True
-        elif key == pygame.K_r:
-            P1_KEYS.update(DEFAULT_P1_KEYS)
-            P2_KEYS.update(DEFAULT_P2_KEYS)
-            return "changed"
-        elif key == pygame.K_ESCAPE:
-            return "back"
-        self.idx = col * len(SEL_ACTS) + row
-        return None
-
-
 # ================================================================ 主程序
 
 def build_scanlines():
@@ -910,14 +732,18 @@ def run_window():
 
     demo = "--demo" in sys.argv            # 演示模式：AI 对 AI，直接开打
     difficulty = "normal"
+    battle_i = 0                           # 战斗曲 A/B 按局轮换
     scene = FIGHT if demo else MENU
     fight = None                           # 菜单场景下尚无对战实例
     sel = None                             # 选人界面状态
     kc = None                              # 按键设置界面状态
     if demo:
+        battle_i += 1
         fight = Fight("demo", frames, bg, sfx, difficulty=difficulty,
                       pads=pads, record_script=True)
     victory_fight = None                   # 回放前的结算局引用
+    arcade = None                          # 街机模式状态（None=非街机）
+    arcade_result = None                   # ("clear"/"fail", 通过层数)
     menu_t = 0
     victory_t = 0
     demo_i = 0                             # 演示轮换计数（demo_pair）
@@ -947,6 +773,7 @@ def run_window():
                 elif ev.key == pygame.K_ESCAPE:
                     if scene in (FIGHT, VICTORY):
                         scene, fight = MENU, None
+                        arcade, arcade_result = None, None
                     elif scene == SELECT:
                         scene, sel = MENU, None
                     elif scene == KEYCONFIG:
@@ -967,6 +794,7 @@ def run_window():
                         scene = SELECT
                         sfx.play("menu")
                     elif ev.key == pygame.K_4:
+                        battle_i += 1
                         fight = Fight("demo", frames, bg, sfx,
                                       difficulty=difficulty, pads=pads,
                                       record_script=True)
@@ -975,6 +803,10 @@ def run_window():
                     elif ev.key == pygame.K_5:
                         kc = KeyConfigState()
                         scene = KEYCONFIG
+                        sfx.play("menu")
+                    elif ev.key == pygame.K_6:
+                        sel = SelectState("arcade", difficulty)
+                        scene = SELECT
                         sfx.play("menu")
                     elif ev.key == pygame.K_TAB:   # AI 难度三档轮换
                         difficulty = AI_LEVELS[
@@ -990,19 +822,42 @@ def run_window():
                         scene, sel = MENU, None
                     elif act == "start":
                         m1, m2 = payload
-                        mode = ("2p" if sel.mode == "2p"
-                                else "ai" if sel.mode == "ai" else "training")
+                        if sel.mode == "arcade":
+                            import random as _rnd
+                            arcade = {
+                                "m1": m1, "stage": 0,
+                                "opps": [(MECH_ORDER[_rnd.randrange(
+                                    len(MECH_ORDER))], AI_LEVELS[i])
+                                    for i in range(3)],
+                            }
+                            m2, diff = arcade["opps"][0]
+                            mode, intro_sub = "ai", (
+                                f"街机挑战 1/3 · "
+                                f"{MECH_SPECS[m2]['cn_name']}")
+                        else:
+                            arcade = None
+                            mode = ("2p" if sel.mode == "2p"
+                                    else "ai" if sel.mode == "ai"
+                                    else "training")
+                            intro_sub = None
+                        battle_i += 1
                         fight = Fight(mode, frames, bg, sfx, m1=m1, m2=m2,
-                                      difficulty=difficulty, pads=pads,
-                                      record_script=True)
+                                      difficulty=diff if sel.mode == "arcade"
+                                      else difficulty, pads=pads,
+                                      record_script=True,
+                                      intro_sub=intro_sub)
                         scene, sel = FIGHT, None
                         sfx.play("menu")
                 elif scene == FIGHT and fight is not None:
-                    if ev.key == pygame.K_r:
-                        if fight.training:
-                            fight.reset_round()    # 训练：仅重启假人
+                    if ev.key == pygame.K_r and not fight.scripted:
+                        if arcade is not None:  # 街机：重开当前层
+                            fight.reset_round()
                         else:
-                            fight.restart_match()
+                            battle_i += 1       # 重开一局换曲
+                            if fight.training:
+                                fight.reset_round()    # 训练：仅重启假人
+                            else:
+                                fight.restart_match()
                         sfx.play("menu")
                     elif fight.training and ev.key == pygame.K_F1:
                         fight.show_hitboxes = not fight.show_hitboxes
@@ -1018,7 +873,17 @@ def run_window():
                         scene = FIGHT
                         sfx.play("menu")
                 elif scene == VICTORY and ev.key == pygame.K_r:
-                    if fight:
+                    if arcade is not None:          # 街机：整链重开
+                        arcade["stage"] = 0
+                        m2, diff = arcade["opps"][0]
+                        sub = f"街机挑战 1/3 · {MECH_SPECS[m2]['cn_name']}"
+                        battle_i += 1
+                        fight = Fight("ai", frames, bg, sfx, m1=arcade["m1"],
+                                      m2=m2, difficulty=diff, pads=pads,
+                                      record_script=True, intro_sub=sub)
+                        arcade_result = None
+                        scene = FIGHT
+                    elif fight:
                         fight.restart_match()
                         scene = FIGHT
                     sfx.play("menu")
@@ -1055,18 +920,42 @@ def run_window():
                     wname = fight.match_winner.spec_key
                     stats["wins"][wname] = stats["wins"].get(wname, 0) + 1
                     for p in (fight.p1, fight.p2):
-                        stats["picks"][p.spec_key] =                             stats["picks"].get(p.spec_key, 0) + 1
+                        stats["picks"][p.spec_key] = stats["picks"].get(p.spec_key, 0) + 1
                     save_stats(stats)
-                scene = VICTORY
-                victory_t = 0
-                sfx.play("win")
+                if arcade is not None:                  # 街机流程推进
+                    act, kw = arcade_next(arcade, fight.match_winner is fight.p1)
+                    if act == "next":
+                        battle_i += 1
+                        sub = (f"街机挑战 {kw['stage'] + 1}/3 · "
+                               f"{MECH_SPECS[kw['m2']]['cn_name']}")
+                        fight = Fight("ai", frames, bg, sfx, m1=arcade["m1"],
+                                      m2=kw["m2"], difficulty=kw["difficulty"],
+                                      pads=pads, record_script=True,
+                                      intro_sub=sub)
+                        sfx.play("fight")
+                    else:
+                        arcade_result = ("clear" if act == "clear" else "fail",
+                                         arcade["stage"])
+                        scene = VICTORY
+                        victory_t = 0
+                        sfx.play("win")
+                        if act == "clear" and not fight.scripted:
+                            stats["arcade_clears"] = stats.get("arcade_clears", 0) + 1
+                            save_stats(stats)
+                else:
+                    scene = VICTORY
+                    victory_t = 0
+                    sfx.play("win")
         else:  # VICTORY
             victory_t += 1
             draw_victory(frame, bg, fight.match_winner.spec,
                          fight.wins[0], fight.wins[1],
-                         has_replay=bool(fight.script) and not demo)
+                         has_replay=bool(fight.script) and not demo,
+                         arcade_result=arcade_result[0] if arcade_result else None,
+                         arcade_stage=arcade_result[1] if arcade_result else 0)
             if demo and victory_t > FPS * 6:   # 演示模式：轮换机体与难度再来一局
                 demo_i += 1
+                battle_i += 1
                 m1, m2, diff = demo_pair(demo_i)
                 fight = Fight("demo", frames, bg, sfx, m1=m1, m2=m2,
                               difficulty=diff, pads=pads)
@@ -1081,7 +970,8 @@ def run_window():
             overlay.fill((255, 250, 235, int(min(255, flash_a))))
             screen.blit(overlay, (0, 0))
         pygame.display.flip()
-        sfx.play_bgm("battle" if scene in (FIGHT, VICTORY) else "menu")
+        sfx.play_bgm(("battle2" if battle_i % 2 else "battle")
+                     if scene in (FIGHT, VICTORY) else "menu")
         clock.tick(FPS)
         frame_i += 1
         if smoke and frame_i >= smoke:
@@ -1434,12 +1324,12 @@ def selftest():
     assert payload[1] in MECH_ORDER, "AI 随机体不在名单内"
     sel2 = SelectState("2p", rng=random.Random(5))
     sel2.handle(P1_KEYS["right"])          # P1 → 1
-    sel2.handle(P2_KEYS["left"])           # P2 环绕 → 2
+    sel2.handle(P2_KEYS["left"])           # P2 环绕 → 3（四机体）
     act, payload = sel2.handle(P1_KEYS["melee"])
     assert act is None and sel2.locked[0] and not sel2.locked[1], \
         "P1 锁定后不应直接开局"
     act, payload = sel2.handle(P2_KEYS["melee"])
-    assert act == "start" and payload == (MECH_ORDER[1], MECH_ORDER[2]), \
+    assert act == "start" and payload == (MECH_ORDER[1], MECH_ORDER[3]), \
         "双人选人结果不符"
     print("[18] 选人状态机: OK")
 
@@ -1867,14 +1757,18 @@ def selftest():
     assert shot_frames >= 6, f"苍穹风暴连射数不足: {shot_frames}"
     print("[29] 三层超必杀: OK")
 
-    # 30) 分对阵平衡矩阵：9 对阵各自胜率（正反场各半），35%-65% 带外报警
-    K = max(6, int(os.environ.get("MECHDUEL_MATRIX_K", "20")))
-    matrix = {}
-    for a in MECH_ORDER:
-        for b in MECH_ORDER:
-            w = [0, 0]
+    # 30) 分对阵平衡矩阵：C(n,2)+n 格（无序对阵，含镜像），35%-65% 带外报警
+    K = max(6, int(os.environ.get("MECHDUEL_MATRIX_K", "18")))
+    cells = []
+    for i1, a in enumerate(MECH_ORDER):
+        for b in MECH_ORDER[i1:]:
+            w = [0, 0]                       # a 视角：[a 胜, 对方胜]
+            mirror = a == b
             for k in range(2 * K):
-                m1, m2 = (a, b) if k % 2 == 0 else (b, a)
+                if mirror:
+                    m1, m2 = a, a
+                else:
+                    m1, m2 = (a, b) if k % 2 == 0 else (b, a)
                 fb = Fight("cpu", frames, bg, sfx, m1=m1, m2=m2, quiet=True)
                 fb.ai1 = AIController(fb.p1, fb.p2, "normal",
                                       random.Random(9000 + k))
@@ -1895,23 +1789,22 @@ def selftest():
                     win_mech, win_side = None, None   # 平局不计
                 if win_side is None:
                     continue
-                if a == b:
+                if mirror:
                     w[win_side] += 1         # 镜像：按先后手计
                 elif win_mech == a:
                     w[0] += 1
                 else:
                     w[1] += 1
-            matrix[(a, b)] = w
-    print(f"[30] 分对阵平衡矩阵（每对阵 {2 * K} 局；非镜像=左侧机体胜率，镜像=左/P1 侧胜率）:")
-    for a in MECH_ORDER:
-        cells = []
-        for b in MECH_ORDER:
-            w = matrix[(a, b)]
-            decided = w[0] + w[1]
-            cells.append(f"{b}:{(w[1] * 100 // decided if decided else 50):>3}%")
-        print(f"    {a:>8} | " + "  ".join(cells))
+            cells.append((a, b, w))
+    print(f"[30] 分对阵平衡矩阵（每格 {2 * K} 局；a vs b=a 的胜率，"
+          "镜像=a 在左/P1 侧胜率）:")
+    for a, b, w in cells:
+        decided = w[0] + w[1]
+        rate = w[0] * 100 // decided if decided else 50
+        tag = " 镜像" if a == b else ""
+        print(f"    {a:>8} vs {b:<8}{tag}: {rate:>3}%  ({w[0]}-{w[1]})")
     alarms = []
-    for (a, b), w in matrix.items():
+    for a, b, w in cells:
         decided = w[0] + w[1]
         if a == b or not decided:
             continue
@@ -1920,7 +1813,8 @@ def selftest():
             alarms.append(f"{a} vs {b}: {rate:.0%}")
     if alarms:
         print("    ⚠ 警告：对阵失衡（超出 35%-65%）" + " / ".join(alarms))
-    assert sum(w[0] + w[1] for w in matrix.values()) > 18 * K * 9 // 10,         "矩阵存在大量未决局"
+    n_cells = len(MECH_ORDER) * (len(MECH_ORDER) + 1) // 2
+    assert sum(w[0] + w[1] for _, _, w in cells) > 2 * K * n_cells * 9 // 10,         "矩阵存在大量未决局"
     print("[30] 分对阵平衡矩阵: OK")
 
     # 31) 完整对局录像：input 序列回放与原局状态逐点一致

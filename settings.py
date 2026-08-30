@@ -81,7 +81,7 @@ def load_keymap(path=KEYMAP_FILE):
 
 
 # 选人界面固定顺序
-MECH_ORDER = ["garnet", "azure", "verdant"]
+MECH_ORDER = ["garnet", "azure", "verdant", "violet"]
 
 # ---------------------------------------------------------------- 机甲规格
 # 三机甲共用像素骨架，配色与数值不同；每台各有专属超必杀与专属特性
@@ -151,6 +151,29 @@ MECH_SPECS = {
                 "dmg": 9},
             3: {"name": "世界树降临", "total": 66,
                 "shots": tuple(range(10, 42, 4)), "dmg": 6},   # 8 段 ×6
+        },
+    },
+    "violet": {
+        "name": "VIOLET",
+        "cn_name": "紫电",
+        "palette": "p4",
+        "hp": 102,
+        "walk_speed": 1.8,       # 全场最快移速
+        "jump_power": 6.2,
+        "air_jumps": 0,
+        "melee_damage": 10,
+        "melee_range": 40,
+        "knockback": 3.0,
+        "bolt_color": "violet",  # 光束弹配色（电紫）
+        "throw_damage": 16,
+        "super_name": "紫电狂涛",  # 超必杀：五连追踪小电弹
+        "super_levels": {
+            1: {"name": "紫电狂涛", "total": 42,
+                "shots": (10, 15, 20, 25, 30), "dmg": 5},
+            2: {"name": "雷霆万钧", "total": 44, "active": (8, 24),
+                "rush": 6.4, "dmg": 36},
+            3: {"name": "九天雷罚", "total": 64,
+                "shots": tuple(range(10, 60, 5)), "dmg": 5},  # 10 段 ×5
         },
     },
 }
@@ -284,6 +307,16 @@ MOVE_DEFS = {
         "od":         {"name": "弧线榴弹EX", "windup": 10, "active": 4, "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24, "shots": 2, "interval": 8}},
         "back_bolt":  {"name": "种子地雷", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 0, "delay": 60, "mine": True}},
     },
+    "violet": {
+        "heavy":      {"name": "雷击",     "windup": 12, "active": 5,  "recover": 19, "dmg": 18, "range": 42, "launch": True},
+        "fwd_heavy":  {"name": "雷突",     "windup": 13, "active": 6,  "recover": 20, "dmg": 20, "range": 46, "lunge": 1.5},
+        "back_heavy": {"name": "电扫",     "windup": 11, "active": 6,  "recover": 18, "dmg": 15, "range": 42, "launch": True},
+        "air_heavy":  {"name": "雷坠",     "windup": 7,  "active": 8,  "recover": 6,  "dmg": 13, "range": 34, "launch": True},
+        "dash_light": {"name": "雷殛突进", "windup": 9,  "active": 6,  "recover": 14, "dmg": 13, "range": 40, "rush": 4.2, "launch": True},
+        "fwd_bolt":   {"name": "电光球",   "windup": 11, "active": 4,  "recover": 18, "dmg": 8,  "bolt": {"speed": 3.8, "dist": 160}},
+        "od":         {"name": "雷暴EX",   "windup": 9,  "active": 4,  "recover": 18, "dmg": 8,  "bolt": {"speed": 4.0, "dist": 160, "shots": 3, "interval": 4}},
+        "back_bolt":  None,
+    },
 }
 
 # ---------------------------------------------------------------- 阶段6B：相位槽（Drive）+ 三层超必杀
@@ -318,6 +351,7 @@ VERDANT_SUPER_BOLT_DMG = 12       # 单发榴弹伤害
 VERDANT_SUPER_VY = -4.8           # 榴弹初速（向上）
 VERDANT_SUPER_GRAV = 0.24         # 榴弹重力（弧线弹道）
 # AI 难度三档：反应概率 / 决策间隔 / 失误率全部入表，架构不动
+AI_LEVELS = ("easy", "normal", "hard")   # 菜单 TAB 轮换顺序
 AI_DIFFICULTY = {
     "easy":   {"react_melee": 0.015, "react_bolt": 0.020, "grab_block": 0.015,
                "grab_near": 0.35, "dodge_throw": 0.015, "decide": (16, 30),
@@ -409,6 +443,18 @@ MECH_PALETTES = {
         "E": (150, 255, 170),
         "W": (242, 255, 244),
     },
+    "p4": {   # VIOLET 紫电
+        "O": (18, 10, 26),
+        "A": (140, 84, 200),
+        "B": (84, 44, 130),
+        "L": (196, 150, 240),
+        "J": (96, 100, 112),
+        "C": (255, 214, 64),
+        "S": (225, 170, 255),
+        "G": (52, 52, 66),
+        "E": (210, 150, 255),
+        "W": (248, 240, 255),
+    },
 }
 
 # 光束弹配色（热 / 冷 / 酸三套）
@@ -416,4 +462,5 @@ BOLT_PALETTES = {
     "hot":  {"O": (60, 16, 20), "S": (255, 120, 60), "E": (255, 200, 90), "W": (255, 248, 230)},
     "cool": {"O": (10, 30, 50), "S": (70, 190, 255), "E": (170, 235, 255), "W": (240, 252, 255)},
     "acid": {"O": (8, 34, 18), "S": (90, 220, 110), "E": (180, 255, 160), "W": (245, 255, 235)},
+    "violet": {"O": (26, 8, 36), "S": (190, 110, 255), "E": (240, 190, 255), "W": (250, 242, 255)},
 }

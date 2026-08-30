@@ -93,6 +93,26 @@ def _bgm_battle():
     return buf
 
 
+def _bgm_battle2():
+    """战斗曲 B：小调推进，约 8s 循环（与 A 按局轮换）。"""
+    step = 0.125
+    bass = (98, 98, 0, 98, 147, 0, 110, 98) * 2
+    bars = (
+        (440, 523, 494, 440, 392, 440, 330, 392),
+        (440, 494, 523, 587, 523, 494, 440, 349),
+    )
+    buf = array.array("h")
+    for bar in bars:
+        for f in bass:
+            if f:
+                buf.extend(_square(step, f, f, 0.15))
+            else:
+                buf.extend(_silence(step))
+        for f in bar:
+            buf.extend(_square(step * 2, f, f, 0.09))
+    return buf
+
+
 class Sfx:
     """音效 + BGM 集合；初始化失败时全部 play() 静默。"""
 
@@ -130,8 +150,9 @@ class Sfx:
             }
             # BGM：专用通道循环播放
             self.bgm = {
-                "menu":   _sound(_bgm_menu()),
-                "battle": _sound(_bgm_battle()),
+                "menu":    _sound(_bgm_menu()),
+                "battle":  _sound(_bgm_battle()),
+                "battle2": _sound(_bgm_battle2()),
             }
             pygame.mixer.set_reserved(1)
             self.bgm_ch = pygame.mixer.Channel(0)
