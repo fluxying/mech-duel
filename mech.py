@@ -33,7 +33,7 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       PARRY_RUSH_WINDOW, RUSH_FRAMES, RUSH_SPEED,
                       DIM_CHARGE_MIN, DIM_CHARGE_MAX, DIM_DMG, DIM_RANGE,
                       DIM_GUARD_MULT, REVERSAL_DEF, WALL_SPLASH_STUN,
-                      SUPER_COST)
+                      SUPER_COST, COMBO_WINDOW, LAUNCH_VX_SCALE)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
 from effects import Projectile
 
@@ -101,6 +101,8 @@ class Mech:
         self.combo_timer = 0      # 距上次被命中帧数（超时重置连段）
         self.tech_window = 0      # 拆投判定窗剩余帧（按投即置位）
         self.tech_stun = 0        # 被拆投后投方附加硬直帧
+        self.press_age = {}       # 攻击键最近按下帧号（连按合并窗用）
+        self.knockdown = False    # 倒地中（渲染躺地帧）
         self.melee_cd = 0
         self.ranged_cd = 0
         self.throw_cd = 0
@@ -264,6 +266,39 @@ class Mech:
         self.super_pending = lvl         # 通知 Fight 播放对应等级演出
         return True
 
+    def _pair(self, act_a, act_b):
+        """两攻击键在 COMBO_WINDOW 帧内先后按下（含同帧）且仍新鲜。"""
+        pa, pb = self.press_age.get(act_a), self.press_age.get(act_b)
+        if pa is None or pb is None:
+            return False
+        return (abs(pa - pb) <= COMBO_WINDOW
+                and self.age - max(pa, pb) <= COMBO_WINDOW)
+
+    def _combo_convert(self):
+        """攻击键快速连按合并：J+U=Drive 冲击，前方向+J+K=OD。
+
+        人手无法严格同帧，靠 COMBO_WINDOW 容错窗把先落下的键「扣住」等待
+        伙伴键（首个键已启动的招式由 MELEE/HEAVY/SHOOT 前摇期调用本函数转换）。
+        命中返回状态名并消耗按键记录。
+        """
+        if not self.grounded:
+            return None
+        if self._pair("melee", "heavy"):
+            self.press_age.pop("melee", None)
+            self.press_age.pop("heavy", None)
+            self.dim_t0 = None
+            self.armor_left = 1          # 蓄力全程吸收一段伤害
+            self._enter(DIMPACT)
+            return DIMPACT
+        fwd = (self.facing == 1 and self.input["right"]) or               (self.facing == -1 and self.input["left"])
+        if fwd and self.drive >= DRIVE_COST and self._pair("melee", "ranged"):
+            self.press_age.pop("melee", None)
+            self.press_age.pop("ranged", None)
+            self.drive -= DRIVE_COST
+            self._start_move(SPECIAL, "od")
+            return SPECIAL
+        return None
+
     def move_hitbox(self):
         """HEAVY / AIR_HEAVY / SPECIAL 判定盒（读 move def，判定相内有效）。"""
         d = self.move
@@ -364,6 +399,9 @@ class Mech:
         for dname in ("left", "right"):
             if dname in fresh:
                 self._tap_age[-1 if dname == "left" else 1] = self.age
+        for act in ("melee", "heavy", "ranged"):
+            if act in fresh:
+                self.press_age[act] = self.age   # 连按合并窗计时
         self._prev_input = dict(inp)
 
         # 面向对手（动作进行中锁定朝向）
@@ -387,6 +425,7 @@ class Mech:
                         and (inp["jump"] or inp["block"])):
                     self._enter(IDLE)
                     self.combo_count = 0         # 受身成功：连段重置
+                    self.knockdown = False
                     self.wake_invuln = WAKE_INVULN
                     fx.dust(self.x, self.y, n=3)
                     self._physics(fx)
@@ -462,6 +501,10 @@ class Mech:
 
         if st == MELEE:
             self.t += 1
+            # 前摇期连按合并：轻斩启动后 6 帧内补按伙伴键 → 冲击/OD
+            if self.t <= MELEE_WINDUP and self._combo_convert() is not None:
+                self._physics(fx)
+                return
             # 判定相小幅突进
             if MELEE_WINDUP <= self.t < MELEE_WINDUP + MELEE_ACTIVE:
                 self.vx = self.facing * 0.9
@@ -518,6 +561,10 @@ class Mech:
 
         if st == SHOOT:
             self.t += 1
+            # 启动期连按合并：光束启动后 6 帧内补按轻斩 → OD
+            if self.t <= SHOOT_FIRE_T and self._combo_convert() is not None:
+                self._physics(fx)
+                return
             if self.grounded:
                 self.vx = 0
             else:
@@ -538,10 +585,12 @@ class Mech:
                 if self.t >= 2 and (inp["jump"] or inp["block"]):
                     self._enter(IDLE)     # 被投落地也可受身
                     self.combo_count = 0
+                    self.knockdown = False
                     self.wake_invuln = WAKE_INVULN
                 else:
                     self._enter(HURT)
                     self._stun_extra = THROWN_LAND_STUN
+                    self.knockdown = True   # 倒地：渲染躺地帧，可快速起身
                     fx.dust(self.x, GROUND_Y, n=6)
                     fx.shake(4)
                     sfx.play("hit")
@@ -619,7 +668,17 @@ class Mech:
             d = self.move
             self.t += 1
             w0, a1 = d["windup"], d["windup"] + d["active"]
-            self.vx = self.facing * d.get("lunge", 0) if w0 <= self.t < a1 else 0
+            # 前摇期连按合并：重击启动后 6 帧内补按轻斩 → 冲击
+            if self.t <= w0 and self._combo_convert() is not None:
+                self._physics(fx)
+                return
+            if self.t < a1:
+                if d.get("retreat"):
+                    self.vx = -self.facing * 1.1   # 后重：边后撤边横扫
+                else:
+                    self.vx = self.facing * d.get("lunge", 0)
+            else:
+                self.vx = 0
             if self.grounded and self.move_did_hit and self.t >= a1:
                 key = self._special_cmd()     # 重击命中取消 → 特殊技
                 if key is not None:
@@ -688,31 +747,21 @@ class Mech:
             return
 
         if st == BLOCK and self.block_stun > 0:   # 受防硬直：防御中无法行动
+            if self._combo_convert() is not None:  # 硬直中仍可拆招反击
+                self._physics(fx)
+                return
             self.block_stun -= 1
             self.vx *= 0.85
             self._physics(fx)
             return
 
-        # Drive 冲击：轻+重同按（含受防硬直中的拆招反击）
-        if "melee" in fresh and "heavy" in fresh and self.grounded \
-                and st in (IDLE, WALK, BLOCK):
-            self.dim_t0 = None
-            self.armor_left = 1           # 蓄力全程吸收一段伤害
-            self._enter(DIMPACT)
+        # Drive 冲击 / OD 强化技：攻击键快速连按合并（同按容错窗）
+        if st in (IDLE, WALK, BLOCK) and self._combo_convert() is not None:
             self._physics(fx)
             return
 
         # 超必杀：依据方向与槽位选择 Lv1/2/3（最高优先级）
         if self.grounded and self._try_super():
-            self._physics(fx)
-            return
-
-        # OD 强化技：前方向 + 轻+束同按，耗 1 格 Drive
-        fwd_held0 = (self.facing == 1 and inp["right"]) or                     (self.facing == -1 and inp["left"])
-        if (fwd_held0 and "melee" in fresh and "ranged" in fresh
-                and self.grounded and self.drive >= DRIVE_COST):
-            self.drive -= DRIVE_COST
-            self._start_move(SPECIAL, "od")
             self._physics(fx)
             return
 
@@ -837,6 +886,8 @@ class Mech:
         self.state = state
         self.t = 0
         self.anim_t = 0
+        if state == IDLE:
+            self.knockdown = False       # 起身不再呈倒地
         if state == THROW:
             self.tech_stun = 0           # 新投技不带拆投硬直
         if state == MELEE:
@@ -979,7 +1030,9 @@ class Mech:
             self._air_hurt = True
             self._ground_t = 0
             self.vy = THROW_VY
-            self.vx = from_dir * THROW_VX
+            # 技能击倒就近倒地（便于压制），投技/超必杀保留全距离击飞
+            scale = 1.0 if unblockable else LAUNCH_VX_SCALE
+            self.vx = from_dir * THROW_VX * scale
             fx.throw_impact(self.x, self.y - 30)
             return "hit"
         self.state = HURT
@@ -1037,6 +1090,8 @@ class Mech:
             if self.spec_key == "verdant":
                 return "atk0" if self.t < first else "shoot"
             return "shoot" if self.t >= first else "atk0"
+        if st == HURT and self.knockdown:
+            return "ko"                   # 击倒：躺地帧（可受身起身）
         if st == GBREAK:
             return "hurt"
         seq = ANIMS[st]

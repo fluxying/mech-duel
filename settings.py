@@ -90,7 +90,7 @@ MECH_SPECS = {
         "name": "GARNET",
         "cn_name": "红莲",
         "palette": "p1",
-        "hp": 106,
+        "hp": 104,
         "walk_speed": 1.35,      # px / frame
         "jump_power": 6.0,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
         "air_jumps": 0,
@@ -279,8 +279,8 @@ SPECIAL_CD = 30                  # 特殊技结束后的射击系共享冷却
 MOVE_DEFS = {
     "garnet": {
         "heavy":      {"name": "重击",     "windup": 14, "active": 5,  "recover": 20, "dmg": 18, "range": 44, "launch": True},
-        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 22, "range": 48, "guard_mult": 1.5, "lunge": 1.2},
-        "back_heavy": {"name": "横扫",     "windup": 15, "active": 6,  "recover": 22, "dmg": 18, "range": 46, "launch": True},
+        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 22, "range": 48, "guard_mult": 1.5, "lunge": 2.0},
+        "back_heavy": {"name": "横扫",     "windup": 15, "active": 6,  "recover": 22, "dmg": 18, "range": 46, "launch": True, "retreat": True},
         "air_heavy":  {"name": "踏压",     "windup": 8,  "active": 8,  "recover": 8,  "dmg": 15, "range": 36, "launch": True},
         "dash_light": {"name": "装甲冲撞", "windup": 12, "active": 8,  "recover": 22, "dmg": 13, "range": 40, "armor": True, "launch": True, "rush": 3.2},
         "fwd_bolt":   {"name": "熔核喷发", "windup": 10, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.2, "dist": 90}},
@@ -289,7 +289,7 @@ MOVE_DEFS = {
     },
     "azure": {
         "heavy":      {"name": "重击",     "windup": 12, "active": 5,  "recover": 18, "dmg": 18, "range": 42, "launch": True},
-        "fwd_heavy":  {"name": "突蹴",     "windup": 13, "active": 6,  "recover": 20, "dmg": 21, "range": 46, "lunge": 1.4},
+        "fwd_heavy":  {"name": "突蹴",     "windup": 13, "active": 6,  "recover": 20, "dmg": 21, "range": 46, "lunge": 2.0},
         "back_heavy": {"name": "对空斩",   "windup": 10, "active": 6,  "recover": 18, "dmg": 16, "range": 42, "launch": True},
         "air_heavy":  {"name": "俯冲刃",   "windup": 7,  "active": 8,  "recover": 6,  "dmg": 14, "range": 34, "launch": True},
         "dash_light": {"name": "相位刺",   "windup": 10, "active": 6,  "recover": 16, "dmg": 14, "range": 40, "rush": 3.6},
@@ -299,8 +299,8 @@ MOVE_DEFS = {
     },
     "verdant": {
         "heavy":      {"name": "重击",     "windup": 13, "active": 5,  "recover": 19, "dmg": 19, "range": 43, "launch": True},
-        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 22, "range": 45, "launch": True, "lunge": 1.1},
-        "back_heavy": {"name": "扫击",     "windup": 14, "active": 6,  "recover": 20, "dmg": 17, "range": 44, "launch": True},
+        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 22, "range": 45, "launch": True, "lunge": 1.8},
+        "back_heavy": {"name": "扫击",     "windup": 14, "active": 6,  "recover": 20, "dmg": 17, "range": 44, "launch": True, "retreat": True},
         "air_heavy":  {"name": "种子散布", "windup": 6,  "active": 10, "recover": 8,  "dmg": 4,  "range": 30, "bolt": {"speed": 0, "vy": 0.6, "delay": 45, "drop": True, "shots": 2, "interval": 6}},
         "dash_light": {"name": "藤蔓勾拉", "windup": 11, "active": 6,  "recover": 18, "dmg": 14, "range": 42, "pull": 34, "launch": True},
         "fwd_bolt":   {"name": "弧线榴弹", "windup": 12, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.4, "vy": -4.0, "grav": 0.24}},
@@ -309,8 +309,8 @@ MOVE_DEFS = {
     },
     "violet": {
         "heavy":      {"name": "雷击",     "windup": 12, "active": 5,  "recover": 19, "dmg": 18, "range": 42, "launch": True},
-        "fwd_heavy":  {"name": "雷突",     "windup": 13, "active": 6,  "recover": 20, "dmg": 20, "range": 46, "lunge": 1.5},
-        "back_heavy": {"name": "电扫",     "windup": 11, "active": 6,  "recover": 18, "dmg": 15, "range": 42, "launch": True},
+        "fwd_heavy":  {"name": "雷突",     "windup": 13, "active": 6,  "recover": 20, "dmg": 20, "range": 46, "lunge": 2.0},
+        "back_heavy": {"name": "电扫",     "windup": 11, "active": 6,  "recover": 18, "dmg": 15, "range": 42, "launch": True, "retreat": True},
         "air_heavy":  {"name": "雷坠",     "windup": 7,  "active": 8,  "recover": 6,  "dmg": 13, "range": 34, "launch": True},
         "dash_light": {"name": "雷殛突进", "windup": 9,  "active": 6,  "recover": 14, "dmg": 13, "range": 40, "rush": 4.2, "launch": True},
         "fwd_bolt":   {"name": "电光球",   "windup": 11, "active": 4,  "recover": 18, "dmg": 8,  "bolt": {"speed": 3.8, "dist": 160}},
@@ -369,6 +369,11 @@ AI_DIFFICULTY = {
                "heavy_p": 0.30, "special_p": 0.22, "od_p": 0.05, "impact_p": 0.06,
                "parry_p": 0.03},
 }
+
+# ---------------------------------------------------------------- 阶段8.1：同按容错与表现修正
+COMBO_WINDOW = 4                 # 攻击键连按合并窗：J+U=Drive 冲击，J+K=OD（帧；4 帧≈66ms，防止 AI 计划翻转误触发）
+PARRY_HITSTOP = 16               # 完美格挡时停帧（双方定格，便于确认）
+LAUNCH_VX_SCALE = 0.9            # 击倒（非投技）的水平击飞微衰减——主要靠躺地帧表现击倒
 
 # ---------------------------------------------------------------- 阶段7：场地 / 战绩
 STAGE_ORDER = ("night", "dawn")  # 菜单 E 键轮换

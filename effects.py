@@ -110,10 +110,12 @@ class Projectile:
 
 
 class Slash:
-    """近战弧光：判定相展开的扇形残影。"""
+    """近战弧光：判定相展开的扇形残影（scale 区分重击变体，cool=青色弧光）。"""
 
-    def __init__(self, mech):
+    def __init__(self, mech, scale=1.0, cool=False):
         self.mech = mech
+        self.scale = scale
+        self.cool = cool
         self.t = 0
         self.life = 6
 
@@ -129,9 +131,12 @@ class Slash:
         cx = m.x + m.facing * 12
         cy = m.y - 34
         prog = self.t / self.life
-        r = 20 + 16 * prog
-        w = max(1, int(3 * (1 - prog)))
-        col = (255, 240, 200) if self.t < 3 else (255, 190, 110)
+        r = (20 + 16 * prog) * self.scale
+        w = max(1, int(3 * (1 - prog) * self.scale))
+        if self.cool:
+            col = (190, 240, 255) if self.t < 3 else (120, 210, 255)
+        else:
+            col = (255, 240, 200) if self.t < 3 else (255, 190, 110)
         if m.facing == 1:
             start, end = -75, 55
         else:
@@ -304,8 +309,8 @@ class Fx:
         """战术弹字：惩罚反击 / 拆投提示等。"""
         self.callouts.append(Callout(x, y, text, color))
 
-    def slash(self, mech):
-        self.slashes.append(Slash(mech))
+    def slash(self, mech, scale=1.0, cool=False):
+        self.slashes.append(Slash(mech, scale=scale, cool=cool))
 
     def throw_impact(self, x, y):
         """投技命中：重火花 + 落地尘 + 大震动。"""

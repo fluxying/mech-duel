@@ -34,7 +34,8 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       PUNISH_MULT, COMBO_RESET_FRAMES, COMBO_SCALE_MIN,
                       DRIVE_MAX, DRIVE_HIT_GAIN, DRIVE_PARRY_GAIN,
                       PARRY_STAGGER, DIM_DMG, WALL_SPLASH_STUN, SUPER_COST,
-                      DIM_GUARD_MULT, STAGE_ORDER, STAGES, STATS_FILE)
+                      DIM_GUARD_MULT, STAGE_ORDER, STAGES, STATS_FILE,
+                      PARRY_HITSTOP)
 from assets import (build_mech_frames, build_background, get_font,
                     SPRITE_W, SPRITE_H, ANCHOR_FX, PIX)
 from mech import Mech, IDLE
@@ -335,7 +336,15 @@ class Fight:
             elif (m.state in ("heavy", "special", "air_heavy")
                     and m.move is not None
                     and m.t == m.move["windup"]):
-                self.fx.slash(m)
+                key = m.move_key or ""
+                scale, cool = 1.0, False
+                if "fwd" in key or key == "od":
+                    scale = 1.35          # 前重/OD：大弧光
+                elif "back" in key:
+                    scale, cool = 1.05, True   # 后重：青色横扫
+                elif key == "air_heavy":
+                    scale = 1.15
+                self.fx.slash(m, scale=scale, cool=cool)
 
     def _separate(self):
         a, b = self.p1, self.p2
@@ -457,7 +466,10 @@ class Fight:
             if res is None:            # 对方无敌帧：判定不消耗，攻击穿透
                 continue
             atk.melee_did_hit = True
-            if res == "parried":           # 被完美格挡：攻击中断 + 踉跄
+            if res == "parried":           # 被完美格挡：时停 + 攻击中断 + 踉跄
+                self.hitstop = PARRY_HITSTOP
+                self.fx.flash(70)
+                self.fx.shake(4)
                 atk.stagger = PARRY_STAGGER
                 atk._enter(IDLE)
                 continue
@@ -489,7 +501,10 @@ class Fight:
             if res is None:            # 无敌帧：判定不消耗
                 continue
             atk.move_did_hit = True
-            if res == "parried":           # 被完美格挡：攻击中断 + 踉跄
+            if res == "parried":           # 被完美格挡：时停 + 攻击中断 + 踉跄
+                self.hitstop = PARRY_HITSTOP
+                self.fx.flash(70)
+                self.fx.shake(4)
                 atk.stagger = PARRY_STAGGER
                 atk._enter(IDLE)
                 continue
@@ -515,7 +530,10 @@ class Fight:
                 if res is None:            # 无敌帧：光束穿透不消失
                     continue
                 bolt.dead = True
-                if res == "parried":       # 被完美格挡：弹体被弹开
+                if res == "parried":       # 被完美格挡：时停 + 弹体被弹开
+                    self.hitstop = PARRY_HITSTOP
+                    self.fx.flash(70)
+                    self.fx.shake(4)
                     bolt.owner.stagger = PARRY_STAGGER
                     bolt.owner._enter(IDLE)
                     continue
@@ -1849,6 +1867,125 @@ def selftest():
     assert f31r.round_no == f31.round_no
     print(f"[31] 对局录像回放一致（{len(f31.script)} 帧输入, "
           f"{len(snaps)} 个状态采样点）: OK")
+
+    # 32) 第四机甲 VIOLET：数据链完整 + 镜像实战可跑 + 四卡选人环绕
+    assert MECH_SPECS["violet"]["palette"] == "p4"
+    assert MECH_ORDER[-1] == "violet" and len(MECH_ORDER) == 4
+    for k in ("heavy", "fwd_heavy", "back_heavy", "air_heavy", "dash_light",
+              "fwd_bolt", "od"):
+        assert MOVE_DEFS["violet"].get(k), f"violet 缺 {k}"
+    f32 = Fight("cpu", frames, bg, sfx, m1="violet", m2="violet", seed=9,
+                quiet=True)
+    f32.ai1 = AIController(f32.p1, f32.p2, "normal", random.Random(61))
+    f32.ai2 = AIController(f32.p2, f32.p1, "normal", random.Random(62))
+    g32 = ROUND_TIME * 60 * 6
+    while f32.match_winner is None and g32 > 0:
+        f32.step(None)
+        g32 -= 1
+    assert f32.match_winner is not None, "VIOLET 镜像局未完成"
+    sel32 = SelectState("2p")
+    for _ in range(4):
+        sel32.handle(P2_KEYS["right"])     # 四卡游标环绕回 0
+    assert sel32.cur[1] == 0
+    used = {m for i in range(16) for m in demo_pair(i)[:2]}
+    assert used == set(MECH_ORDER), "演示轮换未覆盖全部机体"
+    print("[32] 第四机甲 VIOLET + 四卡选人: OK")
+
+    # 33) 街机模式流程：推进 / 失败 / 通关 + 横幅副标题
+    a33 = {"m1": "garnet", "stage": 0,
+           "opps": [("azure", "easy"), ("verdant", "normal"),
+                    ("garnet", "hard")]}
+    act, kw = arcade_next(a33, True)
+    assert act == "next" and a33["stage"] == 1 and kw["difficulty"] == "normal"
+    assert arcade_next(a33, False)[0] == "fail"
+    a33b = {"m1": "azure", "stage": 0,
+            "opps": [("a", "easy"), ("b", "normal"), ("c", "hard")]}
+    for want_stage, want_diff in ((1, "normal"), (2, "hard")):
+        act, kw = arcade_next(a33b, True)
+        assert act == "next" and a33b["stage"] == want_stage
+        assert kw["difficulty"] == want_diff
+    assert arcade_next(a33b, True)[0] == "clear"
+    f33 = Fight("ai", frames, bg, sfx, m1="garnet", m2="azure",
+                intro_sub="街机挑战 1/3 · 苍鳍")
+    f33.step(FakeKeys({}))
+    assert f33.intro_sub == "街机挑战 1/3 · 苍鳍"
+    print("[33] 街机模式流程: OK")
+
+    # 34) 修复合验证：连按合并 / 重击三变体位移 / 击倒躺地 / 完美格挡时停
+    from settings import (COMBO_WINDOW as _cw, PARRY_HITSTOP as _ph,
+                          LAUNCH_VX_SCALE as _lvs, PARRY_WINDOW as _pw,
+                          PARRY_STAGGER as _ps, DRIVE_MAX as _dm,
+                          DRIVE_COST as _dc)   # 别名导入：不遮蔽函数级名字
+    f34 = Fight("2p", frames, bg, sfx)
+    f34.phase = ACTIVE
+    f34.step(FakeKeys({pygame.K_j: True}))
+    f34.step(FakeKeys({}))
+    f34.step(FakeKeys({pygame.K_u: True}))
+    assert f34.p1.state == "drive_impact", f"J→U 连按合并失败: {f34.p1.state}"
+    f34.step(FakeKeys({pygame.K_j: True}))
+    f34.step(FakeKeys({}))
+    f34.step(FakeKeys({pygame.K_u: True}))
+    assert f34.p1.state == "drive_impact", "U→J 反序连按合并失败"
+    f34b = Fight("2p", frames, bg, sfx)
+    f34b.phase = ACTIVE
+    f34b.p1.drive = _dm
+    f34b.step(FakeKeys({pygame.K_d: True, pygame.K_j: True}))
+    f34b.step(FakeKeys({pygame.K_d: True}))
+    f34b.step(FakeKeys({pygame.K_d: True, pygame.K_k: True}))
+    assert f34b.p1.state == "special" and f34b.p1.move_key == "od",         f"OD 连按合并失败: {f34b.p1.state}/{f34b.p1.move_key}"
+    assert f34b.p1.drive == _dm - _dc
+
+    def heavy_probe(keys):
+        fh = Fight("2p", frames, bg, sfx)
+        fh.phase = ACTIVE
+        fh.p1.x, fh.p2.x = 150, 320
+        x0 = fh.p1.x
+        for _ in range(3):
+            fh.step(FakeKeys(keys))
+        for _ in range(24):
+            fh.step(FakeKeys({}))
+        return fh.p1.move_key, fh.p1.x - x0
+
+    mk, _ = heavy_probe({pygame.K_u: True})
+    assert mk == "heavy"
+    mk, dx_fwd = heavy_probe({pygame.K_d: True, pygame.K_u: True})
+    assert mk == "fwd_heavy" and dx_fwd > 6, f"前重无前冲: {dx_fwd:.1f}"
+    mk, dx_back = heavy_probe({pygame.K_a: True, pygame.K_u: True})
+    assert mk == "back_heavy" and dx_back < -6, f"后重未后撤: {dx_back:.1f}"
+
+    f34c = Fight("2p", frames, bg, sfx)
+    f34c.phase = ACTIVE
+    f34c.p2.take_damage(20, 1, f34c.fx, sfx, heavy=True, launch=True)
+    landed = False
+    for _ in range(90):
+        f34c.step(FakeKeys({}))
+        if f34c.p2.grounded and f34c.p2.state == "hurt":
+            landed = True
+            break
+    assert landed, "击倒未落地"
+    assert f34c.p2.knockdown and f34c.p2.current_frame_name() == "ko",         f"击倒未呈躺地帧: {f34c.p2.current_frame_name()}"
+    rose = False
+    for _ in range(12):
+        f34c.step(FakeKeys({pygame.K_DOWN: True}))   # 倒地受身
+        if f34c.p2.state == "idle":
+            rose = True
+            break
+    assert rose, "倒地受身未生效"
+    assert _lvs < 1.0                     # 技能击倒就近倒地
+
+    f34d = Fight("2p", frames, bg, sfx)
+    f34d.phase = ACTIVE
+    f34d.p1.x, f34d.p2.x = 200, 226
+    f34d.p1.state = "melee"
+    f34d.p1.t = MELEE_WINDUP
+    f34d.p1.melee_did_hit = False
+    f34d.p2.state = "block"
+    f34d.p2.parry_window = _pw
+    f34d.step(FakeKeys({pygame.K_DOWN: True}))   # 按住防：保持 BLOCK 态
+    assert f34d.hitstop == _ph, f"完美格挡时停缺失: {f34d.hitstop}"
+    assert f34d.p2.hp == f34d.p2.max_hp, "完美格挡掉血"
+    assert f34d.p1.stagger == _ps, "攻方未踉跄"
+    print("[34] 同按合并 / 重击变体 / 击倒表现 / 格挡时停: OK")
 
     print("SELFTEST PASS")
     pygame.quit()
