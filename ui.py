@@ -23,12 +23,12 @@ class HUD:
     def reset(self):
         self.ghost = {}
 
-    def draw(self, surf, p1, p2, wins1, wins2, timer_frames):
+    def draw(self, surf, p1, p2, wins1, wins2, timer_frames, training=False):
         self._bar(surf, p1, left=True)
         self._bar(surf, p2, left=False)
         self._pips(surf, wins1, left=True)
         self._pips(surf, wins2, left=False)
-        self._timer(surf, timer_frames)
+        self._timer(surf, timer_frames, training)
 
     def _bar(self, surf, m, left):
         x0 = BAR_MARGIN if left else INTERNAL_W - BAR_MARGIN - BAR_W
@@ -114,7 +114,19 @@ class HUD:
             pts = [(cx, y - 3), (cx + 3, y), (cx, y + 3), (cx - 3, y)]
             pygame.draw.polygon(surf, col, pts)
 
-    def _timer(self, surf, timer_frames):
+    def _timer(self, surf, timer_frames, training=False):
+        if training:
+            fnt = get_font(14)
+            txt = "∞"
+            img = fnt.render(txt, True, COLORS["timer"])
+            shadow = fnt.render(txt, True, (20, 16, 28))
+            cx = INTERNAL_W // 2
+            surf.blit(shadow, (cx - img.get_width() // 2 + 2, 7 + 2))
+            surf.blit(img, (cx - img.get_width() // 2, 7))
+            fnt2 = get_font(8)
+            sub = fnt2.render("TRAINING", True, (200, 200, 220))
+            surf.blit(sub, (cx - sub.get_width() // 2, 26))
+            return
         secs = max(0, -(-timer_frames // 60))   # 向上取整
         fnt = get_font(17)
         txt = f"{secs:02d}"
@@ -133,10 +145,13 @@ def banner(surf, text, sub=None, pulse=False):
     img = fnt.render(text, True, COLORS["banner"])
     shadow = fnt.render(text, True, COLORS["banner_sh"])
     cx, cy = INTERNAL_W // 2, INTERNAL_H // 2 - 24
-    off = 0
-    if pulse:
-        import pygame.time
-        off = 0
+    if pulse:                       # 呼吸缩放（FIGHT! 提示）
+        ph = (pygame.time.get_ticks() // 9) % 8
+        k = 1.0 + 0.06 * (ph / 8.0 if ph < 4 else (8 - ph) / 8.0)
+        img = pygame.transform.scale(
+            img, (int(img.get_width() * k), int(img.get_height() * k)))
+        shadow = pygame.transform.scale(
+            shadow, (int(shadow.get_width() * k), int(shadow.get_height() * k)))
     surf.blit(shadow, (cx - img.get_width() // 2 + 3, cy - img.get_height() // 2 + 3))
     surf.blit(img, (cx - img.get_width() // 2, cy - img.get_height() // 2))
     if sub:
@@ -145,46 +160,179 @@ def banner(surf, text, sub=None, pulse=False):
         surf.blit(img2, (cx - img2.get_width() // 2, cy + 22))
 
 
-def draw_menu(surf, bg, frames, t):
+DIFF_CN = {"easy": "简单", "normal": "普通", "hard": "困难"}
+
+
+def draw_menu(surf, bg, frames, t, difficulty="normal"):
     surf.blit(bg, (0, 0))
-    # 两机甲登场姿势（贴两侧，避免与说明文字重叠）
+    # 三机甲登场姿势（贴两侧与底部，避免与说明文字重叠）
     idle_p1 = frames["p1"]["idle"][1]
     idle_p2 = frames["p2"]["idle"][-1]
+    idle_p3 = frames["p3"]["idle"][-1]
     bob = 2 if (t // 22) % 2 else 0
-    surf.blit(idle_p1, (36, 236 - SPRITE_H + bob))
-    surf.blit(idle_p2, (480 - 36 - idle_p2.get_width(), 236 - SPRITE_H + bob))
+    surf.blit(idle_p1, (10, 236 - SPRITE_H + bob))
+    surf.blit(idle_p2, (480 - 10 - idle_p2.get_width(), 236 - SPRITE_H + bob))
+    surf.blit(idle_p3, (66, 236 - SPRITE_H + 4 - bob))
 
     fnt_big = get_font(34)
     title = fnt_big.render("MECH DUEL", True, (245, 240, 225))
     sh = fnt_big.render("MECH DUEL", True, (25, 14, 34))
     cx = INTERNAL_W // 2
-    surf.blit(sh, (cx - title.get_width() // 2 + 3, 38 + 3))
-    surf.blit(title, (cx - title.get_width() // 2, 38))
+    surf.blit(sh, (cx - title.get_width() // 2 + 3, 34 + 3))
+    surf.blit(title, (cx - title.get_width() // 2, 34))
     fnt_cn = get_font(15)
     sub = fnt_cn.render("钢 铁 对 决", True, (250, 200, 120))
-    surf.blit(sub, (cx - sub.get_width() // 2, 74))
+    surf.blit(sub, (cx - sub.get_width() // 2, 70))
 
+    fnt_opt = get_font(12)
+    rows = [
+        ("[1] 双人对抗    2P  VS  2P", (230, 230, 240)),
+        (f"[2] 挑战 AI     VS  CPU    难度:{DIFF_CN[difficulty]}",
+         (230, 230, 240)),
+        ("[3] 训练模式    FREE TRAINING", (230, 230, 240)),
+        ("[4] AI 演示     CPU  VS  CPU", (230, 230, 240)),
+        ("[5] 按键设置    KEY CONFIG", (230, 230, 240)),
+    ]
+    y0 = 100
+    for i, (txt, col) in enumerate(rows):
+        img = fnt_opt.render(txt, True, col)
+        surf.blit(img, (cx - img.get_width() // 2, y0 + i * 16))
     blink = (t // 30) % 2 == 0
-    fnt_opt = get_font(13)
-    o1 = fnt_opt.render("[1] 双人对抗   2P  VS", True, (230, 230, 240))
-    o2 = fnt_opt.render("[2] 挑战 AI    VS  CPU", True, (230, 230, 240))
-    surf.blit(o1, (cx - o1.get_width() // 2, 118))
-    surf.blit(o2, (cx - o2.get_width() // 2, 138))
     if blink:
-        hint = fnt_opt.render("按 1 或 2 开始", True, (255, 214, 100))
-        surf.blit(hint, (cx - hint.get_width() // 2, 166))
+        hint = fnt_opt.render("按 1-5 选择 · TAB 切换 AI 难度 · M 静音",
+                              True, (255, 214, 100))
+        surf.blit(hint, (cx - hint.get_width() // 2, y0 + 5 * 16 + 4))
 
     fnt_help = get_font(9)
-    h1 = fnt_help.render("P1  GARNET: A/D 移动  W 跳  S 防御  J 斩击  K 光束  L 投技", True, (215, 160, 150))
-    h2 = fnt_help.render("P2  AZURE : ←/→ 移动  ↑ 跳  ↓ 防御  1 斩击  2 光束  3 投技", True, (150, 180, 230))
-    surf.blit(h1, (cx - h1.get_width() // 2, 198))
-    surf.blit(h2, (cx - h2.get_width() // 2, 212))
-    h4 = fnt_help.render("双击方向 冲刺/后撤 · 空中可斩击 · 投技无视防御", True, (255, 214, 100))
-    surf.blit(h4, (cx - h4.get_width() // 2, 222))
-    h5 = fnt_help.render("I/4 超必杀(槽满) · 落地按跳/防 受身起身 · 被投可拆", True, (170, 220, 255))
-    surf.blit(h5, (cx - h5.get_width() // 2, 236))
-    h3 = fnt_help.render("三局两胜 · 每局 60 秒 · R 重开  ESC 菜单", True, (170, 170, 190))
-    surf.blit(h3, (cx - h3.get_width() // 2, 250))
+    h1 = fnt_help.render(
+        "P1  A/D 移动  W 跳  S 防  J 斩  K 束  L 投  I 超杀(槽满)  双击方向 冲刺/后撤",
+        True, (215, 160, 150))
+    h2 = fnt_help.render(
+        "P2  ←/→ 移动  ↑ 跳  ↓ 防  小键盘1 斩 2 束 3 投 4 超杀(可在[5]改键)",
+        True, (150, 180, 230))
+    surf.blit(h1, (cx - h1.get_width() // 2, 212))
+    surf.blit(h2, (cx - h2.get_width() // 2, 226))
+    h4 = fnt_help.render("空中可斩击 · 投技无视防御 · 落地按跳/防 受身 · 训练: F1 判定框 F2 假人格挡",
+                         True, (170, 220, 255))
+    surf.blit(h4, (cx - h4.get_width() // 2, 240))
+    h3 = fnt_help.render("三局两胜 · 每局 60 秒 · R 重开  ESC 菜单",
+                         True, (170, 170, 190))
+    surf.blit(h3, (cx - h3.get_width() // 2, 254))
+
+
+def draw_select(surf, bg, frames, sel, t):
+    """选人界面：P1 A/D+J，P2 ←/→+小键盘1（AI/训练模式 CPU 随机）。"""
+    from settings import MECH_ORDER, MECH_SPECS
+    surf.blit(bg, (0, 0))
+    cx = INTERNAL_W // 2
+    fnt_big = get_font(20)
+    title = fnt_big.render("SELECT YOUR MECH 选择机体", True, (245, 240, 225))
+    surf.blit(title, (cx - title.get_width() // 2, 26))
+    if sel.mode == "ai":
+        fnt_d = get_font(10)
+        d = fnt_d.render(f"AI 难度: {DIFF_CN[sel.difficulty]}（菜单 TAB 切换）",
+                         True, (255, 214, 100))
+        surf.blit(d, (cx - d.get_width() // 2, 52))
+
+    centers = [110, 240, 370]
+    card = pygame.Rect(0, 0, 96, 118)
+    fnt_nm = get_font(11)
+    fnt_cn = get_font(9)
+    for i, key in enumerate(MECH_ORDER):
+        spec = MECH_SPECS[key]
+        img = frames[spec["palette"]]["idle"][1]
+        card.centerx = centers[i]
+        card.top = 78
+        cursor = sel.cur
+        sel_col = (232, 76, 61)
+        if cursor[0] == i:
+            pygame.draw.rect(surf, sel_col, card, 1)
+            pygame.draw.rect(surf, sel_col, card.inflate(4, 4), 1)
+        p2_active = sel.mode == "2p"
+        p2_col = (66, 134, 234)
+        if p2_active and cursor[1] == i:
+            pygame.draw.rect(surf, p2_col, card.inflate(-4, -4), 1)
+        if (sel.locked[0] and cursor[0] == i) or (p2_active and sel.locked[1]
+                                                  and cursor[1] == i):
+            pygame.draw.rect(surf, (255, 214, 100), card.inflate(8, 8), 1)
+        surf.blit(img, (centers[i] - img.get_width() // 2, card.top + 12))
+        nm = fnt_nm.render(f"{spec['name']}·{spec['cn_name']}", True,
+                           (240, 240, 245))
+        surf.blit(nm, (centers[i] - nm.get_width() // 2, card.bottom - 22))
+        tag = fnt_cn.render(spec["super_name"], True, (200, 190, 210))
+        surf.blit(tag, (centers[i] - tag.get_width() // 2, card.bottom - 8))
+        # P1 游标（上方红▲）
+        if cursor[0] == i and (t // 14) % 2 == 0:
+            px = centers[i]
+            pygame.draw.polygon(surf, sel_col,
+                                [(px, card.top - 12), (px - 6, card.top - 21),
+                                 (px + 6, card.top - 21)])
+            lab = fnt_cn.render("P1", True, sel_col)
+            surf.blit(lab, (px - lab.get_width() // 2, card.top - 34))
+        # P2 游标（下方蓝▼）
+        if p2_active and cursor[1] == i and (t // 14) % 2 == 0:
+            px = centers[i]
+            pygame.draw.polygon(surf, p2_col,
+                                [(px, card.bottom + 26), (px - 6, card.bottom + 35),
+                                 (px + 6, card.bottom + 35)])
+            lab = fnt_cn.render("P2", True, p2_col)
+            surf.blit(lab, (px - lab.get_width() // 2, card.bottom + 38))
+
+    fnt_h = get_font(10)
+    if sel.mode == "2p":
+        hint = "P1: A/D 选择 J 确认      P2: ←/→ 选择 小键盘1 确认      ESC 返回"
+    elif sel.mode == "ai":
+        hint = "P1: A/D 选择 J 确认      P2 由 CPU 随机体随机      ESC 返回"
+    else:
+        hint = "P1: A/D 选择 J 确认      假人随机使用机体      ESC 返回"
+    img = fnt_h.render(hint, True, (235, 220, 190))
+    surf.blit(img, (cx - img.get_width() // 2, 236))
+
+
+# 按键设置界面用
+ACT_CN = {"left": "左移", "right": "右移", "jump": "跳跃", "block": "防御",
+          "melee": "斩击", "ranged": "光束", "throw": "投技", "super": "超必杀"}
+
+
+def draw_keyconfig(surf, bg, rows, idx, waiting, t):
+    """按键重映射界面：rows = [(玩家, 动作, 键名)]。"""
+    surf.blit(bg, (0, 0))
+    cx = INTERNAL_W // 2
+    fnt_big = get_font(18)
+    title = fnt_big.render("KEY CONFIG 按键设置", True, (245, 240, 225))
+    surf.blit(title, (cx - title.get_width() // 2, 22))
+
+    fnt = get_font(10)
+    col_x = (60, 260)
+    row_h = 17
+    for i, (player, act, keyname) in enumerate(rows):
+        col = 0 if player == "P1" else 1
+        row_in_col = i % (len(rows) // 2)
+        x = col_x[col]
+        y = 56 + row_in_col * row_h
+        selected = i == idx
+        if selected:
+            pygame.draw.rect(surf, (50, 44, 66), (x - 6, y - 3, 190, row_h))
+            pygame.draw.rect(surf, (255, 214, 100), (x - 6, y - 3, 190, row_h), 1)
+        tag = fnt.render(f"{player} {ACT_CN[act]}", True, (220, 220, 235))
+        surf.blit(tag, (x, y))
+        kv = fnt.render(keyname, True,
+                        (255, 214, 100) if selected else (150, 190, 240))
+        surf.blit(kv, (x + 120, y))
+
+    blink = (t // 24) % 2 == 0
+    fnt_h = get_font(10)
+    if waiting:
+        if blink:
+            msg = fnt_h.render("…按任意键绑定（ESC 取消）", True, (255, 120, 90))
+            surf.blit(msg, (cx - msg.get_width() // 2, 220))
+    else:
+        msg = fnt_h.render("↑/↓ 选择  回车 改键  R 恢复默认  ESC 返回",
+                           True, (235, 220, 190))
+        surf.blit(msg, (cx - msg.get_width() // 2, 220))
+    note = fnt_h.render("手柄无需设置：P1=第一个手柄 P2=第二个，十字键移动 ABXY=斩/束/投/超",
+                        True, (160, 170, 190))
+    surf.blit(note, (cx - note.get_width() // 2, 244))
 
 
 def draw_victory(surf, bg, winner_spec, wins1, wins2):

@@ -51,12 +51,60 @@ def _sound(samples):
     return pygame.mixer.Sound(buffer=samples.tobytes())
 
 
+# ---------------------------------------------------------------- BGM（程序化 chiptune 循环曲）
+def _silence(dur, vol=0.0):
+    return _square(dur, 55, 55, vol)
+
+
+def _bgm_menu():
+    """菜单曲：舒缓琶音，约 5.8s 循环。"""
+    step = 0.18
+    arp = (262, 330, 392, 523, 392, 330)
+    bass = (131, 0, 98, 0)
+    buf = array.array("h")
+    for rep in range(3):
+        b = bass[rep % len(bass)]
+        for f in arp:
+            if b:
+                buf.extend(_square(step, b, b, 0.11))
+            else:
+                buf.extend(_silence(step))
+            buf.extend(_square(step * 2, f, f, 0.075))
+    return buf
+
+
+def _bgm_battle():
+    """战斗曲：驱动型低音 + 两条主旋律变奏，约 8s 循环。"""
+    step = 0.125
+    bass = (110, 110, 0, 110, 165, 0, 110, 98) * 2
+    bars = (
+        (440, 523, 587, 523, 440, 392, 330, 392),
+        (440, 523, 587, 659, 587, 523, 440, 330),
+    )
+    buf = array.array("h")
+    for bar in bars:
+        for f in bass:
+            if f:
+                buf.extend(_square(step, f, f, 0.15))
+            else:
+                buf.extend(_silence(step))
+        for f in bar:
+            buf.extend(_square(step * 2, f, f, 0.09))
+    return buf
+
+
 class Sfx:
-    """音效集合；初始化失败时全部 play() 静默。"""
+    """音效 + BGM 集合；初始化失败时全部 play() 静默。"""
+
+    BGM_VOL = 0.45
 
     def __init__(self):
         self.ok = False
         self.snd = {}
+        self.bgm = {}
+        self.bgm_name = None
+        self.bgm_ch = None
+        self.muted = False
         try:
             if pygame.mixer.get_init() is None:
                 return
@@ -80,10 +128,44 @@ class Sfx:
                 "break": _sound(_concat(_noise(0.3, 0.3),
                                         _square(0.25, 420, 60, 0.3))),
             }
+            # BGM：专用通道循环播放
+            self.bgm = {
+                "menu":   _sound(_bgm_menu()),
+                "battle": _sound(_bgm_battle()),
+            }
+            pygame.mixer.set_reserved(1)
+            self.bgm_ch = pygame.mixer.Channel(0)
+            self.bgm_ch.set_volume(self.BGM_VOL)
             self.ok = True
         except Exception:
             self.ok = False
 
     def play(self, name):
-        if self.ok and name in self.snd:
+        if self.ok and not self.muted and name in self.snd:
             self.snd[name].play()
+
+    # ---------------- BGM ----------------
+    def play_bgm(self, name):
+        """切换循环曲（同名不重启）；name=None 停止。"""
+        if not self.ok or name == self.bgm_name:
+            return
+        if self.bgm_ch is not None:
+            self.bgm_ch.stop()
+        self.bgm_name = name
+        if name is not None and name in self.bgm and not self.muted:
+            self.bgm_ch.play(self.bgm[name], loops=-1)
+
+    def stop_bgm(self):
+        if self.bgm_ch is not None:
+            self.bgm_ch.stop()
+        self.bgm_name = None
+
+    def toggle_mute(self):
+        """静音开关：BGM 停/恢复，音效静默。返回当前静音状态。"""
+        self.muted = not self.muted
+        if self.bgm_ch is not None:
+            if self.muted:
+                self.bgm_ch.stop()
+            elif self.bgm_name is not None:
+                self.bgm_ch.play(self.bgm[self.bgm_name], loops=-1)
+        return self.muted

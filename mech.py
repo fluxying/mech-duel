@@ -20,6 +20,8 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       SUPER_MAX, SUPER_TOTAL, SUPER_INVULN_FRAMES,
                       GARNET_SUPER_ACTIVE, AZURE_SUPER_SHOTS,
                       AZURE_SUPER_BOLT_SPEED,
+                      VERDANT_SUPER_SHOTS, VERDANT_SUPER_VY,
+                      VERDANT_SUPER_BOLT_DMG,
                       GUARD_MAX, GUARD_REGEN, GUARD_GAIN_MELEE, GUARD_GAIN_BOLT,
                       GUARD_BREAK_STUN, JUMP_BOOST)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
@@ -75,6 +77,7 @@ class Mech:
         self.energy = ENERGY_MAX
         self.super = 0               # 超必杀槽
         self.guard = GUARD_MAX       # 破防值槽
+        self.air_jumps_used = 0      # 已用空中跳跃次数（VERDANT 二段跳）
         self.state = IDLE
         self.t = 0                # 状态内计时
         self.anim_t = 0
@@ -227,6 +230,11 @@ class Mech:
                 self.vx = (self.facing * 6.0
                            if GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]
                            else 0)
+            elif self.spec_key == "verdant":
+                # 翠暴轰炸：原地呼叫两发弧线榴弹，砸向对手当前位置
+                self.vx = 0
+                if self.t in VERDANT_SUPER_SHOTS:
+                    self._fire_super_arc(opponent, fx, sfx)
             else:
                 self.vx = 0
                 if self.t in AZURE_SUPER_SHOTS:
@@ -423,7 +431,14 @@ class Mech:
         else:
             # 空中
             self.anim_t += 1
-            if inp["melee"] and self.melee_cd <= 0:
+            if ("jump" in fresh
+                    and self.air_jumps_used < self.spec.get("air_jumps", 0)):
+                # 专属机动：空中二段跳（VERDANT）
+                self.vy = -self.spec["jump_power"] * 0.92
+                self.air_jumps_used += 1
+                fx.dust(self.x, self.y, n=4)
+                sfx.play("jump")
+            elif inp["melee"] and self.melee_cd <= 0:
                 self._enter(AIR_MELEE)          # 空中下劈
                 self.melee_did_hit = False
             elif (inp["ranged"] and self.ranged_cd <= 0
@@ -448,6 +463,7 @@ class Mech:
                     fx.dust(self.x, GROUND_Y, n=4)
                 self.y = GROUND_Y
                 self.vy = 0.0
+                self.air_jumps_used = 0    # 落地恢复空中跳跃次数
                 if self.state == JUMP:
                     self._enter(IDLE)
         self.x = max(ARENA_LEFT, min(ARENA_RIGHT, self.x))
@@ -474,6 +490,18 @@ class Mech:
         fx.spawn_super_bolt(self, mx, my, idx)
         fx.muzzle_flash(mx, my, self.facing)
         fx.shake(4)
+        sfx.play("shoot")
+
+    def _fire_super_arc(self, opponent, fx, sfx):
+        """VERDANT 超必杀「翠暴轰炸」：弧线榴弹，按对手当前位置解算落点。"""
+        idx = VERDANT_SUPER_SHOTS.index(self.t)
+        dx = opponent.x - self.x
+        vx = max(-4.2, min(4.2, dx / 48.0)) + (idx * 2 - 1) * 0.30
+        sx, sy = self.x + self.facing * 6, self.y - 58
+        fx.spawn_arc_bolt(self, sx, sy, vx, VERDANT_SUPER_VY,
+                          VERDANT_SUPER_BOLT_DMG)
+        fx.muzzle_flash(sx, sy, self.facing)
+        fx.shake(3)
         sfx.play("shoot")
 
     def take_damage(self, dmg, from_dir, fx, sfx, heavy=False,
@@ -563,6 +591,8 @@ class Mech:
                 if GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]:
                     return "atk1"
                 return "atk0" if self.t < GARNET_SUPER_ACTIVE[0] else "atk2"
+            if self.spec_key == "verdant":
+                return "atk0" if self.t < VERDANT_SUPER_SHOTS[0] else "shoot"
             return "shoot" if self.t >= AZURE_SUPER_SHOTS[0] else "atk0"
         if st == GBREAK:
             return "hurt"

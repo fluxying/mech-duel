@@ -8,7 +8,8 @@ import pygame
 
 from settings import (RANGED_DAMAGE, RANGED_SPEED, ARENA_LEFT, ARENA_RIGHT,
                       INTERNAL_W, COLORS, GROUND_Y,
-                      AZURE_SUPER_BOLT_DMG, AZURE_SUPER_BOLT_SPEED)
+                      AZURE_SUPER_BOLT_DMG, AZURE_SUPER_BOLT_SPEED,
+                      VERDANT_SUPER_GRAV)
 from assets import build_bolts
 
 RNG = random.Random(20260829)
@@ -43,23 +44,32 @@ class Particle:
 class Projectile:
     """光束弹。owner 为发射者，命中其对手。"""
 
-    def __init__(self, owner, x, y, bolts, big=False):
+    def __init__(self, owner, x, y, bolts, big=False, vx=None, vy=None,
+                 grav=0.0, dmg=None):
         self.owner = owner
         self.x = x
         self.y = y
         self.facing = owner.facing
-        self.vx = owner.facing * RANGED_SPEED
-        self.vy = 0.0                # 空中射击：斜向下弹道
-        self.dmg = RANGED_DAMAGE
+        self.vx = owner.facing * RANGED_SPEED if vx is None else vx
+        self.vy = 0.0 if vy is None else vy
+        self.grav = grav              # >0 时为弧线弹道（VERDANT 榴弹）
+        self.dmg = RANGED_DAMAGE if dmg is None else dmg
         self.t = 0
         self.dead = False
         self.big = big                 # 超必杀强化弹：判定与外形放大
         self.sprites = bolts[owner.spec["bolt_color"]]
 
     def update(self, fx):
+        self.vy += self.grav
         self.x += self.vx
         self.y += self.vy
         self.t += 1
+        if self.grav and self.y >= GROUND_Y:   # 弧线榴弹落地爆散
+            fx.dust(self.x, GROUND_Y, n=7)
+            fx.sparks(self.x, GROUND_Y - 4, 1 if self.vx >= 0 else -1,
+                      hot=True, n=8)
+            self.dead = True
+            return
         if self.t % 2 == 0:
             fx.particles.append(Particle(
                 self.x - self.facing * 5, self.y + RNG.randint(-1, 1),
@@ -187,6 +197,12 @@ class Fx:
         b = Projectile(mech, x, y, self.bolt_sprites, big=True)
         b.dmg = AZURE_SUPER_BOLT_DMG
         b.vx = mech.facing * (AZURE_SUPER_BOLT_SPEED + idx * 0.35)
+        self.bolts.append(b)
+
+    def spawn_arc_bolt(self, mech, x, y, vx, vy, dmg):
+        """VERDANT 弧线榴弹：受重力下坠、落地爆散，可越过站立的对手从头顶砸落。"""
+        b = Projectile(mech, x, y, self.bolt_sprites, big=True,
+                       vx=vx, vy=vy, grav=VERDANT_SUPER_GRAV, dmg=dmg)
         self.bolts.append(b)
 
     def flash(self, alpha):

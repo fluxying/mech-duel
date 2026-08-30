@@ -37,14 +37,51 @@ P2_KEYS = {
     "right":  _pg.K_RIGHT,
     "jump":   _pg.K_UP,
     "block":  _pg.K_DOWN,
-    "melee":  _pg.K_1,
-    "ranged": _pg.K_2,
-    "throw":  _pg.K_3,
-    "super":  _pg.K_4,
+    "melee":  _pg.K_KP1,
+    "ranged": _pg.K_KP2,
+    "throw":  _pg.K_KP3,
+    "super":  _pg.K_KP4,
 }
+# 默认键位备份（按键设置界面「恢复默认」用）
+DEFAULT_P1_KEYS = dict(P1_KEYS)
+DEFAULT_P2_KEYS = dict(P2_KEYS)
+KEYMAP_FILE = "keymap.json"     # 按键重映射持久化文件
+
+
+def save_keymap(path=KEYMAP_FILE):
+    """把当前键位表写入 JSON（阶段4 按键重映射）。"""
+    import json
+    data = {"p1": {a: int(c) for a, c in P1_KEYS.items()},
+            "p2": {a: int(c) for a, c in P2_KEYS.items()}}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def load_keymap(path=KEYMAP_FILE):
+    """启动时读取重映射键位；文件不存在/损坏返回 False 并保留默认。"""
+    import json
+    import os
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        for act, code in data.get("p1", {}).items():
+            if act in P1_KEYS:
+                P1_KEYS[act] = int(code)
+        for act, code in data.get("p2", {}).items():
+            if act in P2_KEYS:
+                P2_KEYS[act] = int(code)
+        return True
+    except Exception:
+        return False
+
+
+# 选人界面固定顺序
+MECH_ORDER = ["garnet", "azure", "verdant"]
 
 # ---------------------------------------------------------------- 机甲规格
-# 两机甲共用像素骨架，仅配色与数值不同：重装型 vs 轻型
+# 三机甲共用像素骨架，配色与数值不同；每台各有专属超必杀与专属特性
 MECH_SPECS = {
     "garnet": {
         "name": "GARNET",
@@ -53,6 +90,7 @@ MECH_SPECS = {
         "hp": 120,
         "walk_speed": 1.35,      # px / frame
         "jump_power": 6.0,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
+        "air_jumps": 0,
         "melee_damage": 12,
         "melee_range": 40,       # 判定盒前端离中心的距离
         "knockback": 3.6,
@@ -68,6 +106,7 @@ MECH_SPECS = {
         "hp": 100,
         "walk_speed": 1.7,
         "jump_power": 6.3,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
+        "air_jumps": 0,
         "melee_damage": 9,
         "melee_range": 40,
         "knockback": 3.2,
@@ -75,6 +114,22 @@ MECH_SPECS = {
         "throw_damage": 15,      # 投技伤害（无视格挡）
         "super_name": "苍蓝齐射",  # 超必杀：连发三道强化光束
         "super_damage": 7,       # 每发光束伤害（共 3 发）
+    },
+    "verdant": {
+        "name": "VERDANT",
+        "cn_name": "翠岚",
+        "palette": "p3",
+        "hp": 110,
+        "walk_speed": 1.55,
+        "jump_power": 6.6,       # 全场最高跳跃
+        "air_jumps": 1,          # 专属机动：空中二段跳
+        "melee_damage": 10,
+        "melee_range": 40,
+        "knockback": 3.4,
+        "bolt_color": "acid",    # 光束弹配色（酸绿）
+        "throw_damage": 16,
+        "super_name": "翠暴轰炸",  # 超必杀：两发弧线榴弹砸向对手当前位置
+        "super_damage": 12,      # 单发榴弹伤害（共 2 发）
     },
 }
 
@@ -146,6 +201,28 @@ GUARD_GAIN_MELEE = 22           # 格挡一次近战
 GUARD_GAIN_BOLT = 11            # 格挡一发光束
 GUARD_BREAK_STUN = 55           # 破防硬直帧
 
+# ---------------------------------------------------------------- 阶段3：第三机甲专属超必杀 / AI 难度
+VERDANT_SUPER_SHOTS = (12, 24)    # 两发榴弹发射帧
+VERDANT_SUPER_BOLT_DMG = 12       # 单发榴弹伤害
+VERDANT_SUPER_VY = -4.8           # 榴弹初速（向上）
+VERDANT_SUPER_GRAV = 0.24         # 榴弹重力（弧线弹道）
+# AI 难度三档：反应概率 / 决策间隔 / 失误率全部入表，架构不动
+AI_DIFFICULTY = {
+    "easy":   {"react_melee": 0.015, "react_bolt": 0.020, "grab_block": 0.015,
+               "grab_near": 0.35, "dodge_throw": 0.015, "decide": (16, 30),
+               "mistake": 0.30, "super_p": 0.20, "melee_p": 0.30, "block_p": 0.25},
+    "normal": {"react_melee": 0.035, "react_bolt": 0.050, "grab_block": 0.060,
+               "grab_near": 0.60, "dodge_throw": 0.060, "decide": (8, 16),
+               "mistake": 0.10, "super_p": 0.45, "melee_p": 0.50, "block_p": 0.20},
+    "hard":   {"react_melee": 0.075, "react_bolt": 0.100, "grab_block": 0.120,
+               "grab_near": 0.75, "dodge_throw": 0.140, "decide": (5, 11),
+               "mistake": 0.04, "super_p": 0.60, "melee_p": 0.65, "block_p": 0.10},
+}
+
+# ---------------------------------------------------------------- 阶段4：KO 高光回放
+REPLAY_FRAMES = 100             # 回溯快照帧数
+REPLAY_HOLD = 2                 # 每帧快照播放驻留（慢放倍率的倒数）
+
 # ---------------------------------------------------------------- 颜色
 COLORS = {
     "black":       (12, 10, 18),
@@ -195,10 +272,23 @@ MECH_PALETTES = {
         "E": (110, 225, 255),
         "W": (240, 250, 255),
     },
+    "p3": {   # VERDANT 翠岚
+        "O": (10, 22, 16),
+        "A": (66, 160, 92),
+        "B": (30, 92, 58),
+        "L": (140, 214, 150),
+        "J": (96, 100, 112),
+        "C": (255, 214, 64),
+        "S": (190, 255, 200),
+        "G": (52, 58, 66),
+        "E": (150, 255, 170),
+        "W": (242, 255, 244),
+    },
 }
 
-# 光束弹配色（热 / 冷两套）
+# 光束弹配色（热 / 冷 / 酸三套）
 BOLT_PALETTES = {
     "hot":  {"O": (60, 16, 20), "S": (255, 120, 60), "E": (255, 200, 90), "W": (255, 248, 230)},
     "cool": {"O": (10, 30, 50), "S": (70, 190, 255), "E": (170, 235, 255), "W": (240, 252, 255)},
+    "acid": {"O": (8, 34, 18), "S": (90, 220, 110), "E": (180, 255, 160), "W": (245, 255, 235)},
 }

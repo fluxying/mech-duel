@@ -3,14 +3,13 @@
 
 策略：决策计时器 + 意图计划（接近/拉开/近战/射击/格挡/跳跃/观望），
 带反应性防御（对手起手近战时概率格挡，光束来袭时概率跳跃/格挡）。
-随机延迟与概率让它可被击败，难度适中。
+阶段3：全部概率/间隔/失误率收敛到 settings.AI_DIFFICULTY 三档难度表，
+随机源改为实例自带（可注入种子 → 平衡回归可复现）。
 """
 
 import random
 
-from settings import GUARD_MAX, SUPER_MAX
-
-RNG = random.Random(77)
+from settings import GUARD_MAX, SUPER_MAX, AI_DIFFICULTY
 
 PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT, PLAN_THROW, PLAN_SUPER = (
     "move", "retreat", "melee", "shoot", "block", "jump", "wait", "throw",
@@ -18,9 +17,12 @@ PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAI
 
 
 class AIController:
-    def __init__(self, mech, opponent):
+    def __init__(self, mech, opponent, difficulty="normal", rng=None):
         self.mech = mech
         self.opponent = opponent
+        self.difficulty = difficulty
+        self.p = AI_DIFFICULTY[difficulty]
+        self.rng = rng if rng is not None else random.Random()
         self.plan = PLAN_WAIT
         self.plan_t = 0          # 当前计划剩余帧
         self.decide_t = 10       # 距下次决策
@@ -32,10 +34,9 @@ class AIController:
 
     def update(self):
         m, o = self.mech, self.opponent
+        rng = self.rng
         self._reset_input()
         if m.state == "ko" or o.state == "ko":
-            return
-        if o.state == "ko":
             return
 
         dist = abs(o.x - m.x)
@@ -46,29 +47,29 @@ class AIController:
             o_windup = o.state == "melee" and o.t < 16
             # 自身防御槽告急 → 少格挡多跳（防被 GUARD BREAK）
             guard_low = m.guard <= GUARD_MAX * 0.35
-            if o_windup and dist < 80 and RNG.random() < 0.035:
+            if o_windup and dist < 80 and rng.random() < self.p["react_melee"]:
                 self._set_plan(PLAN_JUMP if guard_low else PLAN_BLOCK,
-                               RNG.randint(16, 30))
+                               rng.randint(16, 30))
             incoming = [b for b in getattr(self, "bolts_ref", [])
                         if b.owner is o and (b.x - m.x) * towards > 0
                         and abs(b.x - m.x) < 90]
-            if incoming and RNG.random() < 0.05:
-                self._set_plan(RNG.choice([PLAN_JUMP] * (3 if guard_low else 1)
+            if incoming and rng.random() < self.p["react_bolt"]:
+                self._set_plan(rng.choice([PLAN_JUMP] * (3 if guard_low else 1)
                                           + [PLAN_BLOCK]),
-                               RNG.randint(12, 24))
+                               rng.randint(12, 24))
             # 对手防御站桩 → 抓投破防
             if (o.state == "block" and dist < 44 and m.throw_cd <= 0
-                    and RNG.random() < 0.06):
+                    and rng.random() < self.p["grab_block"]):
                 self._set_plan(PLAN_THROW, 6)
             # 对手投技起手 → 跳起拆投（投技只抓地面目标）
             if (o.state == "throw" and o.t < 8 and dist < 50
-                    and RNG.random() < 0.06):
+                    and rng.random() < self.p["dodge_throw"]):
                 self._set_plan(PLAN_JUMP, 8)
 
         # ---- 决策 ----
         self.decide_t -= 1
         if self.decide_t <= 0:
-            self.decide_t = RNG.randint(8, 16)
+            self.decide_t = rng.randint(*self.p["decide"])
             self._decide(dist, towards)
 
         # ---- 执行当前计划 ----
@@ -80,36 +81,42 @@ class AIController:
 
     def _decide(self, dist, towards):
         m, o = self.mech, self.opponent
-        r = RNG.random()
+        rng = self.rng
+        p = self.p
+        # 失误率：概率原地发呆（低难度明显、高难度罕见）
+        if rng.random() < p["mistake"]:
+            self._set_plan(PLAN_WAIT, rng.randint(10, 20))
+            return
         # 超必杀槽满：找机会直接放（中远距离优先）
-        if m.super >= SUPER_MAX and dist > 40 and r < 0.45:
+        if m.super >= SUPER_MAX and dist > 40 and rng.random() < p["super_p"]:
             self._set_plan(PLAN_SUPER, 8)
             return
         if dist > 150:
-            if m.energy >= 35 and r < 0.35:
+            if m.energy >= 35 and rng.random() < 0.35:
                 self._set_plan(PLAN_SHOOT, 8)
             else:
-                self._set_plan(PLAN_MOVE, RNG.randint(14, 26))
+                self._set_plan(PLAN_MOVE, rng.randint(14, 26))
         elif dist > 60:
-            if m.energy >= 35 and r < 0.25:
+            if m.energy >= 35 and rng.random() < 0.25:
                 self._set_plan(PLAN_SHOOT, 8)
-            elif r < 0.75:
-                self._set_plan(PLAN_MOVE, RNG.randint(10, 22))
-            elif r < 0.85:
+            elif rng.random() < 0.75:
+                self._set_plan(PLAN_MOVE, rng.randint(10, 22))
+            elif rng.random() < 0.85:
                 self._set_plan(PLAN_JUMP, 10)
             else:
-                self._set_plan(PLAN_WAIT, RNG.randint(8, 16))
+                self._set_plan(PLAN_WAIT, rng.randint(8, 16))
         else:  # 近身
-            if o.state == "block" and m.throw_cd <= 0 and r < 0.6:
+            if (o.state == "block" and m.throw_cd <= 0
+                    and rng.random() < p["grab_near"]):
                 self._set_plan(PLAN_THROW, 6)      # 对面站桩防御就抓投
-            elif m.melee_cd <= 0 and r < 0.5:
+            elif m.melee_cd <= 0 and rng.random() < p["melee_p"]:
                 self._set_plan(PLAN_MELEE, 6)
-            elif r < 0.65:
-                self._set_plan(PLAN_BLOCK, RNG.randint(12, 24))
-            elif r < 0.8:
-                self._set_plan(PLAN_RETREAT, RNG.randint(10, 18))
+            elif rng.random() < p["block_p"]:
+                self._set_plan(PLAN_BLOCK, rng.randint(12, 24))
+            elif rng.random() < 0.5:
+                self._set_plan(PLAN_RETREAT, rng.randint(10, 18))
             else:
-                self._set_plan(PLAN_WAIT, RNG.randint(6, 14))
+                self._set_plan(PLAN_WAIT, rng.randint(6, 14))
 
     def _execute(self, dist, towards):
         m = self.mech
