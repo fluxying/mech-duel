@@ -134,6 +134,31 @@ class Slash:
                             math.radians(a0), math.radians(a1), w)
 
 
+class Callout:
+    """战术弹字（PUNISH / TECH 等）：上浮渐隐文字。"""
+
+    def __init__(self, x, y, text, color):
+        self.x, self.y = x, y
+        self.text = text
+        self.color = color
+        self.life = 44
+
+    def update(self):
+        self.y -= 0.5
+        self.life -= 1
+
+    @property
+    def dead(self):
+        return self.life <= 0
+
+    def draw(self, surf, font):
+        img = font.render(self.text, True, self.color)
+        shadow = font.render(self.text, True, (20, 16, 28))
+        x = int(self.x - img.get_width() / 2)
+        surf.blit(shadow, (x + 2, int(self.y) + 2))
+        surf.blit(img, (x, int(self.y)))
+
+
 class DamageNumber:
     def __init__(self, x, y, val, blocked=False):
         self.x = x + RNG.uniform(-3, 3)
@@ -169,6 +194,7 @@ class Fx:
         self.bolts = []
         self.slashes = []
         self.dmg_numbers = []
+        self.callouts = []
         self.bolt_sprites = build_bolts()
         self.shake_mag = 0.0
         self.flash_a = 0.0             # 全屏白闪强度（超必杀演出）
@@ -180,6 +206,7 @@ class Fx:
         self.bolts.clear()
         self.slashes.clear()
         self.dmg_numbers.clear()
+        self.callouts.clear()
         self.shake_mag = 0
         self.flash_a = 0
 
@@ -262,6 +289,10 @@ class Fx:
     def damage_number(self, x, y, val, blocked=False):
         self.dmg_numbers.append(DamageNumber(x, y, val, blocked))
 
+    def callout(self, x, y, text, color=(255, 120, 90)):
+        """战术弹字：惩罚反击 / 拆投提示等。"""
+        self.callouts.append(Callout(x, y, text, color))
+
     def slash(self, mech):
         self.slashes.append(Slash(mech))
 
@@ -288,6 +319,9 @@ class Fx:
         for d in self.dmg_numbers:
             d.update()
         self.dmg_numbers = [d for d in self.dmg_numbers if not d.dead]
+        for c in self.callouts:
+            c.update()
+        self.callouts = [c for c in self.callouts if not c.dead]
         self.shake_mag *= 0.82
         if self.shake_mag < 0.3:
             self.shake_mag = 0
@@ -311,3 +345,5 @@ class Fx:
             b.draw(surf)
         for d in self.dmg_numbers:
             d.draw(surf, font)
+        for c in self.callouts:
+            c.draw(surf, font)

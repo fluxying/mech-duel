@@ -23,7 +23,10 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       VERDANT_SUPER_SHOTS, VERDANT_SUPER_VY,
                       VERDANT_SUPER_BOLT_DMG,
                       GUARD_MAX, GUARD_REGEN, GUARD_GAIN_MELEE, GUARD_GAIN_BOLT,
-                      GUARD_BREAK_STUN, JUMP_BOOST)
+                      GUARD_BREAK_STUN, JUMP_BOOST,
+                      BLOCK_STUN, BLOCK_PUSH, COMBO_RESET_FRAMES, combo_scale,
+                      PUNISH_MULT, PUNISH_STUN_BONUS,
+                      THROW_TECH_WINDOW)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
 
 IDLE, WALK, JUMP, MELEE, SHOOT, BLOCK, HURT, KO = (
@@ -83,6 +86,11 @@ class Mech:
         self.anim_t = 0
         self.flash = 0            # 受击白闪剩余帧
         self._stun_extra = 0      # 受击附加硬直
+        self.block_stun = 0       # 受防硬直剩余帧
+        self.combo_count = 0      # 作为受击方：当前连段已承受段数（衰减依据）
+        self.combo_timer = 0      # 距上次被命中帧数（超时重置连段）
+        self.tech_window = 0      # 拆投判定窗剩余帧（按投即置位）
+        self.tech_stun = 0        # 被拆投后投方附加硬直帧
         self.melee_cd = 0
         self.ranged_cd = 0
         self.throw_cd = 0
@@ -121,6 +129,17 @@ class Mech:
     @property
     def palette(self):
         return self.spec["palette"]
+
+    @property
+    def punishable(self):
+        """处于可被惩罚反击的状态：出招后摇 / 投技硬直 / 防御崩坏。"""
+        if self.state == GBREAK:
+            return True
+        if self.state == MELEE and self.t >= MELEE_WINDUP + MELEE_ACTIVE:
+            return True
+        if self.state == SHOOT and self.t >= SHOOT_FIRE_T:
+            return True
+        return self.state == THROW and self.t >= THROW_HIT_T
 
     def body_rect(self):
         """机体碰撞盒（受击/推挤/中弹判定）。"""
@@ -175,14 +194,22 @@ class Mech:
             self.flash -= 1
         if self.wake_invuln > 0:
             self.wake_invuln -= 1
+        if self.tech_window > 0:
+            self.tech_window -= 1
+        if self.combo_count > 0:          # 脱离受击超时：连段重置
+            self.combo_timer += 1
+            if self.combo_timer > COMBO_RESET_FRAMES:
+                self.combo_count = 0
         if self.state != BLOCK:
             self.guard = min(GUARD_MAX, self.guard + GUARD_REGEN)  # 防御槽回复
         self.energy = min(ENERGY_MAX, self.energy + ENERGY_REGEN)
 
         inp = self.input
         st = self.state
-        # 新按下检测（供双击冲刺用），随后快照本帧输入
+        # 新按下检测（供双击冲刺/拆投窗用），随后快照本帧输入
         fresh = {k for k, v in inp.items() if v and not self._prev_input.get(k)}
+        if "throw" in fresh:
+            self.tech_window = THROW_TECH_WINDOW   # 按投即置位拆投窗
         self._prev_input = dict(inp)
 
         # 面向对手（动作进行中锁定朝向）
@@ -204,6 +231,7 @@ class Mech:
                 if (self._air_hurt and self._ground_t <= 12
                         and (inp["jump"] or inp["block"])):
                     self._enter(IDLE)
+                    self.combo_count = 0         # 受身成功：连段重置
                     self.wake_invuln = WAKE_INVULN
                     fx.dust(self.x, self.y, n=3)
                     self._physics(fx)
@@ -299,6 +327,7 @@ class Mech:
             if self.grounded:
                 if self.t >= 2 and (inp["jump"] or inp["block"]):
                     self._enter(IDLE)     # 被投落地也可受身
+                    self.combo_count = 0
                     self.wake_invuln = WAKE_INVULN
                 else:
                     self._enter(HURT)
@@ -311,7 +340,7 @@ class Mech:
         if st == THROW:                   # 投技出招（抓取判定在 Fight._combat）
             self.t += 1
             self.vx *= 0.8
-            if self.t >= THROW_TOTAL:
+            if self.t >= THROW_TOTAL + self.tech_stun:   # 被拆投附加硬直
                 self.throw_cd = THROW_COOLDOWN
                 self._enter(IDLE)
             self._physics(fx)
@@ -369,6 +398,12 @@ class Mech:
             return
 
         # ---- 可自由行动：IDLE / WALK / JUMP / BLOCK ----
+        if st == BLOCK and self.block_stun > 0:   # 受防硬直：防御中无法行动
+            self.block_stun -= 1
+            self.vx *= 0.85
+            self._physics(fx)
+            return
+
         # 超必杀：槽满 + 专用键（最高优先级），发动即清空槽位
         if (inp["super"] and self.grounded and self.super >= SUPER_MAX):
             self.super = 0
@@ -472,6 +507,8 @@ class Mech:
         self.state = state
         self.t = 0
         self.anim_t = 0
+        if state == THROW:
+            self.tech_stun = 0           # 新投技不带拆投硬直
 
     # ------------------------------------------------ 攻击
     def _fire(self, fx, sfx):
@@ -505,11 +542,13 @@ class Mech:
         sfx.play("shoot")
 
     def take_damage(self, dmg, from_dir, fx, sfx, heavy=False,
-                    unblockable=False, launch=False):
+                    unblockable=False, launch=False, punish=False):
         """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'break' / 'ko' / None。
 
         unblockable: 无视格挡（投技）；launch: 击飞浮空（被投）；
+        punish: 惩罚反击（×1.2 + 地面强制击倒 + 附加硬直 + PUNISH 弹字）；
         无敌帧期间直接返回 None（攻击穿透，不消耗攻击方判定）。
+        命中伤害按受击方 combo_count 统一衰减（被防/受身/超时重置）。
         """
         if not self.alive:
             return None
@@ -520,12 +559,16 @@ class Mech:
             real = max(1, round(dmg * BLOCK_REDUCE))     # 格挡削血（chip）
             self.hp = max(0, self.hp - real)
             self.guard -= GUARD_GAIN_MELEE if heavy else GUARD_GAIN_BOLT
-            self.vx = from_dir * 1.3
+            self.block_stun = BLOCK_STUN                 # 受防硬直
+            self.vx = from_dir * BLOCK_PUSH
+            self.combo_count = 0                         # 被防重置连段
+            self.combo_timer = 0
             fx.block_spark(self.x + self.facing * 14, self.y - 34)
             fx.damage_number(self.x, self.y - 62, real, blocked=True)
             sfx.play("block")
             if self.guard <= 0:              # GUARD BREAK：防御崩坏
                 self.guard = 0
+                self.block_stun = 0
                 self.state = GBREAK
                 self.t = 0
                 fx.shake(6)
@@ -533,13 +576,24 @@ class Mech:
                 return "break"
             return "blocked"
 
+        if punish:
+            dmg = max(1, round(dmg * PUNISH_MULT))
+            if self.grounded:
+                launch = True               # 强制击倒（浮空坠落→落地硬直）
+        dmg = max(1, round(dmg * combo_scale(self.combo_count)))
+        self.combo_count += 1
+        self.combo_timer = 0
+
         self.hp = max(0, self.hp - dmg)
         self.flash = 5
+        self.block_stun = 0
         self.vx = from_dir * self.spec["knockback"] * (1.0 if heavy else 0.7)
         fx.damage_number(self.x, self.y - 62, dmg)
         fx.sparks(self.x + from_dir * -8, self.y - 34, from_dir,
                   hot=heavy, n=10 if heavy else 6)
         sfx.play("hit")
+        if punish:
+            fx.callout(self.x, self.y - 74, "PUNISH")
         if self.hp <= 0:
             self.state = KO
             self.t = 0
@@ -547,7 +601,7 @@ class Mech:
             self.vx = from_dir * 2.4
             fx.ko_burst(self.x, self.y - 30)
             return "ko"
-        if launch:                       # 被投飞/超必杀击飞：浮空坠落
+        if launch:                       # 被投飞/超必杀击飞/惩罚击倒：浮空坠落
             self.state = THROWN
             self.t = 0
             self._stun_extra = 0
@@ -559,7 +613,8 @@ class Mech:
             return "hit"
         self.state = HURT
         self.t = 0
-        self._stun_extra = 6 if heavy else 0
+        self._stun_extra = (6 if heavy else 0) + (PUNISH_STUN_BONUS if punish
+                                                  else 0)
         self._air_hurt = not self.grounded
         self._ground_t = 0
         if not self.grounded:            # 空中追打（juggle）：向上刷新浮空

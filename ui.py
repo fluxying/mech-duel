@@ -5,7 +5,7 @@ import pygame
 
 from settings import (INTERNAL_W, INTERNAL_H, COLORS, ROUND_TIME,
                       ROUNDS_TO_WIN, RANGED_COST, ENERGY_MAX,
-                      GUARD_MAX, SUPER_MAX)
+                      GUARD_MAX, SUPER_MAX, COMBO_SCALE_STEP, COMBO_SCALE_MIN)
 from assets import get_font, SPRITE_H
 
 BAR_MARGIN = 14
@@ -92,6 +92,17 @@ class HUD:
             surf.fill(s_col, (x0, sy, s_w, SUPER_H))
         else:
             surf.fill(s_col, (x0 + BAR_W - s_w, sy, s_w, SUPER_H))
+
+        # 连段计数（受击方连段 ≥2 段时显示：段数 + 当前衰减倍率）
+        if m.combo_count >= 2:
+            scale = max(COMBO_SCALE_MIN,
+                        1.0 - COMBO_SCALE_STEP * (m.combo_count - 1))
+            txt = f"{m.combo_count} HITS {int(scale * 100)}%"
+            img = get_font(9).render(txt, True, (255, 214, 100))
+            if left:
+                surf.blit(img, (x0, 56))
+            else:
+                surf.blit(img, (x0 + BAR_W - img.get_width(), 56))
 
         # 名字
         name = f"{m.spec['name']}·{m.spec['cn_name']}"

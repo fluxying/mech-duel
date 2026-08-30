@@ -199,6 +199,25 @@ GUARD_GAIN_MELEE = 22           # 格挡一次近战
 GUARD_GAIN_BOLT = 11            # 格挡一发光束
 GUARD_BREAK_STUN = 55           # 破防硬直帧
 
+# ---------------------------------------------------------------- 阶段5A：连段地基（受防硬直/伤害衰减/惩罚反击/投拆）
+# 设计依据 design/MOVESET_COMBO_DESIGN.md §2
+BLOCK_STUN = 12                 # 受防硬直帧（被防轻斩约 -6、重击约 -12：防守方获得有限反击窗而非立即惩罚）
+BLOCK_PUSH = 2.2                # 被防推距初速 px/frame
+COMBO_SCALE_STEP = 0.15         # 连段每段伤害衰减
+COMBO_SCALE_MIN = 0.40          # 衰减下限
+COMBO_RESET_FRAMES = 30         # 脱离受击 30 帧重置连段
+PUNISH_MULT = 1.2               # 惩罚反击伤害倍率（命中后摇/落空投/破防硬直）
+PUNISH_STUN_BONUS = 4           # 惩罚反击附加硬直（地面受击路径）
+THROW_TECH_WINDOW = 6           # 拆投判定窗（抓取判定前 N 帧内按投）
+THROW_TECH_PUSH = 3.0           # 拆投双方后退距离 px
+THROW_TECH_LAG = 6              # 拆投后投方附加硬直帧（-6 帧不利）
+
+
+def combo_scale(count):
+    """连段第 count+1 段的伤害倍率（count 为受击方此前已承受段数）。"""
+    return max(COMBO_SCALE_MIN, 1.0 - COMBO_SCALE_STEP * count)
+
+
 # ---------------------------------------------------------------- 阶段3：第三机甲专属超必杀 / AI 难度
 VERDANT_SUPER_SHOTS = (12, 24)    # 两发榴弹发射帧
 VERDANT_SUPER_BOLT_DMG = 12       # 单发榴弹伤害

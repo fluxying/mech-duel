@@ -21,13 +21,16 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       load_keymap, save_keymap, MECH_ORDER, ROUND_TIME,
                       ROUNDS_TO_WIN, KO_SLOW_FRAMES, HITSTOP_FRAMES,
                       MIN_SEPARATION, ARENA_LEFT, ARENA_RIGHT, GROUND_Y,
-                      BLOCK_REDUCE, MELEE_WINDUP, THROW_HIT_T, THROW_RANGE,
+                      BLOCK_REDUCE, MELEE_WINDUP, MELEE_ACTIVE, THROW_HIT_T,
+                      THROW_RANGE,
                       AIR_MELEE_ACTIVE, AIR_MELEE_MULT, RANGED_DAMAGE,
                       RANGED_COST, ENERGY_MAX, REPLAY_FRAMES, REPLAY_HOLD,
                       SUPER_MAX, SUPER_GAIN_HIT, SUPER_GAIN_TAKE,
                       SUPER_GAIN_BLOCK, SUPER_FLASH_FRAMES, AZURE_SUPER_BOLT_DMG,
                       VERDANT_SUPER_BOLT_DMG, GARNET_SUPER_DMG,
-                      GUARD_MAX, JUMP_SEP_Y)
+                      GUARD_MAX, JUMP_SEP_Y,
+                      THROW_TECH_LAG, THROW_TECH_PUSH, BLOCK_STUN,
+                      PUNISH_MULT, COMBO_RESET_FRAMES, COMBO_SCALE_MIN)
 from assets import (build_mech_frames, build_background, get_font,
                     SPRITE_W, SPRITE_H, ANCHOR_FX, PIX)
 from mech import Mech
@@ -137,6 +140,9 @@ class QuietFx(Fx):
         pass
 
     def damage_number(self, *a, **k):
+        pass
+
+    def callout(self, *a, **k):
         pass
 
     def slash(self, *a, **k):
@@ -374,6 +380,18 @@ class Fight:
                         and abs(dfn.x - atk.x) <= THROW_RANGE):
                     throws.append((atk, dfn))
         for atk, dfn in throws:
+            if len(throws) == 2 or dfn.tech_window > 0:
+                # 拆投：同帧双投自动双拆；或防守方在判定窗内按投 → 无伤，
+                # 双方后退，投方附加硬直（-6 帧不利，拆投是投择的答案）
+                dirn = 1 if dfn.x >= atk.x else -1
+                atk.x = max(ARENA_LEFT, atk.x - dirn * THROW_TECH_PUSH)
+                dfn.x = max(ARENA_LEFT, min(ARENA_RIGHT,
+                                            dfn.x + dirn * THROW_TECH_PUSH))
+                atk.tech_stun = THROW_TECH_LAG
+                self.fx.callout((atk.x + dfn.x) / 2, GROUND_Y - 66, "TECH",
+                                (120, 230, 255))
+                self.sfx.play("block")
+                continue
             res = dfn.take_damage(atk.spec["throw_damage"], atk.facing,
                                   self.fx, self.sfx,
                                   heavy=True, unblockable=True, launch=True)
@@ -397,7 +415,8 @@ class Fight:
             if atk.melee_did_hit:    # 对拼同帧：允许阵亡方的最后一击落地（双 KO 平局）
                 continue
             res = dfn.take_damage(dmg, atk.facing,
-                                  self.fx, self.sfx, heavy=True)
+                                  self.fx, self.sfx, heavy=True,
+                                  punish=dfn.punishable)
             if res is None:            # 对方无敌帧：判定不消耗，攻击穿透
                 continue
             atk.melee_did_hit = True
@@ -414,7 +433,8 @@ class Fight:
             if bolt.rect().colliderect(target.body_rect()):
                 direction = 1 if bolt.vx > 0 else -1
                 res = target.take_damage(bolt.dmg, direction,
-                                         self.fx, self.sfx, heavy=False)
+                                         self.fx, self.sfx, heavy=False,
+                                         punish=target.punishable)
                 if res is None:            # 无敌帧：光束穿透不消失
                     continue
                 bolt.dead = True
@@ -1260,6 +1280,100 @@ def selftest():
           + f" → P1 胜率 {r1:.0%}")
     if not 0.45 <= r1 <= 0.55:
         print("    ⚠ 警告：P1 胜率超出 45%-55% 平衡带，请回调 settings.py 数值")
+
+    # 21) 连段伤害衰减 + 连段计数 + 重置（[22] 预留给 5B 拖尾修正）
+    f21 = Fight("2p", frames, bg, sfx)
+    f21.phase = ACTIVE
+    v = f21.p2
+    hp0 = v.hp
+    deltas = []
+    for _ in range(4):
+        hp_before = v.hp
+        assert v.take_damage(10, 1, f21.fx, sfx) == "hit"
+        deltas.append(hp_before - v.hp)
+    assert deltas[0] == 10 and deltas[-1] < deltas[0], f"衰减未生效: {deltas}"
+    assert deltas == sorted(deltas, reverse=True), f"衰减非单调递减: {deltas}"
+    assert v.combo_count == 4, "连段计数错误"
+    for _ in range(2):                     # 衰减下限 40%
+        hp_before = v.hp
+        v.take_damage(10, 1, f21.fx, sfx)
+        deltas.append(hp_before - v.hp)
+    assert deltas[-2] == deltas[-1] == max(1, round(10 * COMBO_SCALE_MIN)), \
+        f"衰减下限不符: {deltas}"
+    v.state = "block"                      # 被防重置连段
+    assert v.take_damage(10, 1, f21.fx, sfx) == "blocked"
+    assert v.combo_count == 0, "被防未重置连段"
+    v.state = "idle"                       # 超时重置：命中 1 段后静置 31 帧
+    v.take_damage(10, 1, f21.fx, sfx)
+    assert v.combo_count == 1
+    for _ in range(COMBO_RESET_FRAMES + 1):
+        v.update(f21.p1, f21.fx, sfx)
+    assert v.combo_count == 0, "超时未重置连段"
+    print("[21] 连段衰减 + 计数 + 重置: OK")
+
+    # 23) 受防硬直 + 惩罚反击
+    f23 = Fight("2p", frames, bg, sfx)
+    f23.phase = ACTIVE
+    f23.p2.state = "block"
+    assert f23.p2.take_damage(10, 1, f23.fx, sfx) == "blocked"
+    assert f23.p2.block_stun == BLOCK_STUN, "受防硬直未置位"
+    keys = FakeKeys({})
+    for _ in range(BLOCK_STUN):
+        f23.step(keys)
+        assert f23.p2.state == "block", "受防硬直期间不应能行动"
+    f23.step(keys)
+    assert f23.p2.state != "block", "硬直结束未恢复行动"
+    f23b = Fight("2p", frames, bg, sfx)    # 命中出招后摇 → ×1.2 + 强制击倒
+    f23b.phase = ACTIVE
+    f23b.p1.x, f23b.p2.x = 200, 226
+    f23b.p1.state = "melee"
+    f23b.p1.t = MELEE_WINDUP
+    f23b.p1.melee_did_hit = False
+    f23b.p2.state = "melee"
+    f23b.p2.t = MELEE_WINDUP + MELEE_ACTIVE + 1
+    hp0 = f23b.p2.hp
+    f23b.step(FakeKeys({}))
+    assert hp0 - f23b.p2.hp == max(1, round(12 * PUNISH_MULT)), \
+        f"惩罚反击倍率不符: {hp0 - f23b.p2.hp}"
+    assert f23b.p2.state == "thrown", f"惩罚反击未强制击倒: {f23b.p2.state}"
+    f23c = Fight("2p", frames, bg, sfx)    # 对照：判定相中命中 → 无惩罚加成
+    f23c.phase = ACTIVE
+    f23c.p1.x, f23c.p2.x = 200, 226
+    f23c.p1.state = "melee"
+    f23c.p1.t = MELEE_WINDUP
+    f23c.p1.melee_did_hit = False
+    f23c.p2.state = "melee"
+    f23c.p2.t = MELEE_WINDUP + 1
+    hp0 = f23c.p2.hp
+    f23c.step(FakeKeys({}))
+    assert hp0 - f23c.p2.hp == 12, "非惩罚命中不应有加成"
+    assert f23c.p2.state == "hurt", "非惩罚命中不应击倒"
+    print("[23] 受防硬直 + 惩罚反击: OK")
+
+    # 24) 投拆：判定窗内点投 → 无伤 + 投方附加硬直；同帧双投自动双拆
+    f24 = Fight("2p", frames, bg, sfx)
+    f24.phase = ACTIVE
+    f24.p1.x, f24.p2.x = 200, 226
+    for i in range(THROW_HIT_T + 2):
+        k = {pygame.K_l: True, pygame.K_DOWN: True}  # P1 投 / P2 防
+        if i == THROW_HIT_T - 2:
+            k[pygame.K_KP3] = True                   # P2 抓取前 2 帧点投
+        f24.step(FakeKeys(k))
+    assert f24.p2.hp == f24.p2.max_hp, "拆投后不应掉血"
+    assert f24.p1.tech_stun == THROW_TECH_LAG, "拆投未附加投方硬直"
+    assert f24.p2.state == "block", "拆投后防守方状态异常"
+    f24b = Fight("2p", frames, bg, sfx)
+    f24b.phase = ACTIVE
+    f24b.p1.x, f24b.p2.x = 200, 226
+    f24b.p1.state = "throw"
+    f24b.p1.t = THROW_HIT_T - 1
+    f24b.p2.state = "throw"
+    f24b.p2.t = THROW_HIT_T - 1
+    f24b.step(FakeKeys({}))
+    assert f24b.p1.hp == f24b.p1.max_hp and f24b.p2.hp == f24b.p2.max_hp, \
+        "双投自动拆未生效"
+    assert f24b.p1.tech_stun == THROW_TECH_LAG == f24b.p2.tech_stun
+    print("[24] 投拆 + 双投自动拆: OK")
 
     print("SELFTEST PASS")
     pygame.quit()
