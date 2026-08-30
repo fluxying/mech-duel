@@ -26,14 +26,16 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       GUARD_BREAK_STUN, JUMP_BOOST,
                       BLOCK_STUN, BLOCK_PUSH, COMBO_RESET_FRAMES, combo_scale,
                       PUNISH_MULT, PUNISH_STUN_BONUS,
-                      THROW_TECH_WINDOW)
+                      THROW_TECH_WINDOW, MOVE_DEFS, SPECIAL_CD, RANGED_SPEED)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
+from effects import Projectile
 
 IDLE, WALK, JUMP, MELEE, SHOOT, BLOCK, HURT, KO = (
     "idle", "walk", "jump", "melee", "shoot", "block", "hurt", "ko")
 THROW, DASH, BACKSTEP, AIR_MELEE, THROWN = (
     "throw", "dash", "backstep", "air_melee", "thrown")
 SUPER, GBREAK = "super", "guard_break"
+HEAVY, AIR_HEAVY, SPECIAL = "heavy", "air_heavy", "special"  # MOVE_DEFS 驱动
 
 # 状态 -> 动画帧序列 [(帧名, 时长帧)]；MELEE/THROW/AIR_MELEE/SUPER 相位由 t 直接推算
 ANIMS = {
@@ -104,9 +106,17 @@ class Mech:
         self.age = 0              # 总帧数（双击检测用）
         self._prev_input = {}     # 上一帧输入（新按下检测）
         self._tap_age = {}        # 方向 -> 上次单按帧号
+        self.melee_blocked = False  # 上一次轻斩被防（被防取消依据）
+        self.chain_count = 0      # 轻斩连打段数（上限 2 链）
+        self.move_key = None      # 当前 MOVE_DEFS 技键（HEAVY/SPECIAL 系）
+        self.move = None          # 当前技 def
+        self.move_did_hit = False
+        self.armor_on = False     # 霸体生效中（吃半伤不中断）
+        self.bolt_shots_left = 0  # 特殊技待发弹数
+        self.bolt_next_t = 0      # 下一发弹的帧号
         self.input = {k: False for k in
-                      ("left", "right", "jump", "block", "melee", "ranged",
-                       "throw", "super")}
+                      ("left", "right", "jump", "block", "melee", "heavy",
+                       "ranged", "throw", "super")}
 
     # ------------------------------------------------ 辅助量
     @property
@@ -139,7 +149,12 @@ class Mech:
             return True
         if self.state == SHOOT and self.t >= SHOOT_FIRE_T:
             return True
-        return self.state == THROW and self.t >= THROW_HIT_T
+        if self.state == THROW and self.t >= THROW_HIT_T:
+            return True
+        if (self.state in (HEAVY, SPECIAL) and self.move is not None
+                and self.t >= self.move["windup"] + self.move["active"]):
+            return True
+        return False
 
     def body_rect(self):
         """机体碰撞盒（受击/推挤/中弹判定）。"""
@@ -181,6 +196,66 @@ class Mech:
         left, right = sorted((x0, x1))
         return pygame.Rect(int(left), int(self.y) - 56, int(right - left), 56)
 
+    # ------------------------------------------------ MOVE_DEFS 出招（数据驱动）
+    def _start_move(self, state, key):
+        """按表出招：HEAVY / AIR_HEAVY / SPECIAL 共用入口。"""
+        d = MOVE_DEFS[self.spec_key][key]
+        self.move_key = key
+        self.move = d
+        self.move_did_hit = False
+        self.armor_on = False
+        bd = d.get("bolt")
+        self.bolt_shots_left = bd.get("shots", 1) if bd else 0
+        self.bolt_next_t = d["windup"] + 1 if bd else 0
+        self._enter(state)
+
+    def move_hitbox(self):
+        """HEAVY / AIR_HEAVY / SPECIAL 判定盒（读 move def，判定相内有效）。"""
+        d = self.move
+        if d is None:
+            return None
+        w0, a1 = d["windup"], d["windup"] + d["active"]
+        if not (w0 <= self.t < a1):
+            return None
+        f = self.facing
+        x0 = self.x + f * 4
+        x1 = self.x + f * d.get("range", 40)
+        left, right = sorted((x0, x1))
+        return pygame.Rect(int(left), int(self.y) - 46, int(right - left), 30)
+
+    def _special_cmd(self):
+        """识别 Modern 特殊技指令（方向+光束键），返回 move key 或 None。"""
+        inp = self.input
+        fwd = (self.facing == 1 and inp["right"]) or \
+              (self.facing == -1 and inp["left"])
+        back = (self.facing == 1 and inp["left"]) or \
+               (self.facing == -1 and inp["right"])
+        defs = MOVE_DEFS[self.spec_key]
+        if fwd and inp["ranged"] and defs.get("fwd_bolt"):
+            return "fwd_bolt"
+        if back and inp["ranged"] and defs.get("back_bolt"):
+            return "back_bolt"
+        return None
+
+    def _fire_move_bolt(self, fx, sfx):
+        """特殊技弹体（含连发/延时雷/弧线榴弹/下投种子）。"""
+        bd = self.move["bolt"]
+        if bd.get("drop"):                     # 空中下投：从身体处落下
+            mx, my = self.x, self.y - 24
+        elif bd.get("mine"):                   # 布雷：脚前落地
+            mx, my = self.x + self.facing * 42, GROUND_Y - 6
+        else:
+            mx, my = self.muzzle_pos()
+        b = Projectile(self, mx, my, fx.bolt_sprites,
+                       vx=self.facing * bd.get("speed", RANGED_SPEED),
+                       vy=bd.get("vy", 0.0), grav=bd.get("grav", 0.0),
+                       dmg=self.move["dmg"])
+        b.max_dist = bd.get("dist")
+        b.delay_t = bd.get("delay")
+        fx.bolts.append(b)
+        fx.muzzle_flash(mx, my, self.facing)
+        sfx.play("shoot")
+
     # ------------------------------------------------ 主更新
     def update(self, opponent, fx, sfx):
         self.age += 1
@@ -214,7 +289,7 @@ class Mech:
 
         # 面向对手（动作进行中锁定朝向）
         if st not in (MELEE, SHOOT, THROW, DASH, BACKSTEP, AIR_MELEE, THROWN,
-                      SUPER, GBREAK, KO):
+                      SUPER, GBREAK, KO, HEAVY, AIR_HEAVY, SPECIAL):
             self.facing = 1 if opponent.x >= self.x else -1
 
         if st == KO:
@@ -279,12 +354,34 @@ class Mech:
                 self.vx = self.facing * 0.9
             else:
                 self.vx = 0
-            # 命中取消：命中后的后摇期可接光束/投技/跳跃（连段核心）
-            if (self.melee_did_hit and self.grounded
-                    and MELEE_WINDUP <= self.t < MELEE_TOTAL):
+            # 取消阶梯：命中（或被防）后的后摇期可取消（连段核心）
+            if (self.grounded and (self.melee_did_hit or self.melee_blocked)
+                    and self.t >= MELEE_WINDUP):
+                key = self._special_cmd()
+                if key is not None:            # 轻斩取消 → 特殊技
+                    self._start_move(SPECIAL, key)
+                    self._physics(fx)
+                    return
                 if (inp["ranged"] and self.ranged_cd <= 0
                         and self.energy >= RANGED_COST):
-                    self._enter(SHOOT)
+                    self._enter(SHOOT)         # 轻斩取消 → 光束
+                    self._physics(fx)
+                    return
+                if inp["super"] and self.super >= SUPER_MAX:
+                    self.super = 0
+                    self._enter(SUPER)
+                    self.super_did_hit = False
+                    self.super_pending = True
+                    self._physics(fx)
+                    return
+                if inp["heavy"]:               # 目标连段：轻 → 重
+                    self._start_move(HEAVY, "heavy")
+                    self._physics(fx)
+                    return
+                if "melee" in fresh and self.chain_count < 2:
+                    cc = self.chain_count + 1  # 轻斩链（≤2 链）
+                    self._enter(MELEE)
+                    self.chain_count = cc
                     self._physics(fx)
                     return
                 if inp["throw"] and self.throw_cd <= 0:
@@ -351,9 +448,17 @@ class Mech:
             self.anim_t += 1
             self.vx = self.facing * DASH_SPEED * max(0.25, 1 - self.t / DASH_FRAMES)
             if self.t >= 4 and self.grounded:
-                if inp["melee"] and self.melee_cd <= 0:
-                    self._enter(MELEE)
-                    self.melee_did_hit = False
+                if "melee" in fresh:      # 冲刺轻 → 机体专属突进技
+                    self._start_move(SPECIAL, "dash_light")
+                    self._physics(fx)
+                    return
+                if "heavy" in fresh:      # 冲刺重 → 前重
+                    self._start_move(HEAVY, "fwd_heavy")
+                    self._physics(fx)
+                    return
+                if (inp["ranged"] and self.ranged_cd <= 0
+                        and MOVE_DEFS[self.spec_key].get("fwd_bolt")):
+                    self._start_move(SPECIAL, "fwd_bolt")
                     self._physics(fx)
                     return
                 if inp["throw"] and self.throw_cd <= 0:
@@ -397,6 +502,71 @@ class Mech:
                 self._enter(JUMP)
             return
 
+        if st == HEAVY:                   # 重击系（MOVE_DEFS：站重/前重/后重）
+            d = self.move
+            self.t += 1
+            w0, a1 = d["windup"], d["windup"] + d["active"]
+            self.vx = self.facing * d.get("lunge", 0) if w0 <= self.t < a1 else 0
+            if self.grounded and self.move_did_hit and self.t >= a1:
+                key = self._special_cmd()     # 重击命中取消 → 特殊技
+                if key is not None:
+                    self._start_move(SPECIAL, key)
+                    self._physics(fx)
+                    return
+                if inp["super"] and self.super >= SUPER_MAX:
+                    self.super = 0
+                    self._enter(SUPER)
+                    self.super_did_hit = False
+                    self.super_pending = True
+                    self._physics(fx)
+                    return
+            if self.t >= a1 + d["recover"]:
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == AIR_HEAVY:               # 空中重击（下投/急坠，读表）
+            d = self.move
+            self.t += 1
+            self._physics(fx)
+            if self.grounded:
+                fx.dust(self.x, GROUND_Y, n=4)
+                self._enter(IDLE)
+            elif self.t >= d["windup"] + d["active"] + d["recover"]:
+                self._enter(JUMP)
+            return
+
+        if st == SPECIAL:                 # 特殊技（Modern 指令技，读表）
+            d = self.move
+            self.t += 1
+            a1 = d["windup"] + d["active"]
+            if self.t < a1:               # 前摇+判定相：突进与霸体生效区
+                self.vx = self.facing * d.get("rush", 0)
+                self.armor_on = d.get("armor", False)
+            else:
+                self.vx = 0
+                self.armor_on = False
+            if self.bolt_shots_left > 0 and self.t >= self.bolt_next_t:
+                self._fire_move_bolt(fx, sfx)
+                self.bolt_shots_left -= 1
+                self.bolt_next_t += d["bolt"].get("interval", 0)
+            if self.grounded and self.move_did_hit and self.t >= a1:
+                if inp["super"] and self.super >= SUPER_MAX:
+                    self.super = 0        # 特殊技命中取消 → 超必杀
+                    self._enter(SUPER)
+                    self.super_did_hit = False
+                    self.super_pending = True
+                    self._physics(fx)
+                    return
+            if self.t >= a1 + d["recover"]:
+                if d.get("bolt"):
+                    self.ranged_cd = SPECIAL_CD   # 射击系共享冷却
+                else:
+                    self.melee_cd = MELEE_COOLDOWN
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
         # ---- 可自由行动：IDLE / WALK / JUMP / BLOCK ----
         if st == BLOCK and self.block_stun > 0:   # 受防硬直：防御中无法行动
             self.block_stun -= 1
@@ -434,15 +604,30 @@ class Mech:
             if st != BLOCK:
                 self._enter(BLOCK)
             self.vx = 0
+        elif "heavy" in fresh and self.grounded:
+            # 重击三变体：方向+重 = 前重（贴脸突进）/ 后重（对空/扫击）
+            fwd = (self.facing == 1 and inp["right"]) or \
+                  (self.facing == -1 and inp["left"])
+            back = (self.facing == 1 and inp["left"]) or \
+                   (self.facing == -1 and inp["right"])
+            if fwd:
+                self._start_move(HEAVY, "fwd_heavy")
+            elif back:
+                self._start_move(HEAVY, "back_heavy")
+            else:
+                self._start_move(HEAVY, "heavy")
         elif inp["melee"] and self.grounded and self.melee_cd <= 0:
             self._enter(MELEE)
             self.melee_did_hit = False
         elif inp["throw"] and self.grounded and self.throw_cd <= 0:
             self._enter(THROW)
             self.throw_hit_done = False
-        elif (inp["ranged"] and self.grounded and self.ranged_cd <= 0
-              and self.energy >= RANGED_COST):
-            self._enter(SHOOT)
+        elif inp["ranged"] and self.grounded and self.ranged_cd <= 0:
+            key = self._special_cmd()     # 方向+光束 = 特殊技
+            if key is not None:
+                self._start_move(SPECIAL, key)
+            elif self.energy >= RANGED_COST:
+                self._enter(SHOOT)
         elif inp["jump"] and self.grounded:
             self.vy = -self.spec["jump_power"]
             self.vx *= JUMP_BOOST            # 起跳动量：保留并放大水平速度
@@ -476,6 +661,8 @@ class Mech:
             elif inp["melee"] and self.melee_cd <= 0:
                 self._enter(AIR_MELEE)          # 空中下劈
                 self.melee_did_hit = False
+            elif "heavy" in fresh:
+                self._start_move(AIR_HEAVY, "air_heavy")   # 空中重击
             elif (inp["ranged"] and self.ranged_cd <= 0
                   and self.energy >= RANGED_COST):
                 self._enter(SHOOT)              # 空中射击
@@ -509,6 +696,10 @@ class Mech:
         self.anim_t = 0
         if state == THROW:
             self.tech_stun = 0           # 新投技不带拆投硬直
+        if state == MELEE:
+            self.melee_did_hit = False
+            self.melee_blocked = False
+            self.chain_count = 0
 
     # ------------------------------------------------ 攻击
     def _fire(self, fx, sfx):
@@ -542,11 +733,14 @@ class Mech:
         sfx.play("shoot")
 
     def take_damage(self, dmg, from_dir, fx, sfx, heavy=False,
-                    unblockable=False, launch=False, punish=False):
-        """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'break' / 'ko' / None。
+                    unblockable=False, launch=False, punish=False,
+                    guard_mult=1.0):
+        """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'parried' /
+        'armor' / 'break' / 'ko' / None。
 
         unblockable: 无视格挡（投技）；launch: 击飞浮空（被投）；
         punish: 惩罚反击（×1.2 + 地面强制击倒 + 附加硬直 + PUNISH 弹字）；
+        guard_mult: 被防时对防御槽的伤害倍率（前重特长）；
         无敌帧期间直接返回 None（攻击穿透，不消耗攻击方判定）。
         命中伤害按受击方 combo_count 统一衰减（被防/受身/超时重置）。
         """
@@ -555,10 +749,27 @@ class Mech:
         if self.invuln:
             return None
 
+        if self.armor_on and not unblockable:
+            # 霸体：吃半伤不中断动作（返回 'armor'，攻击方判定照常消耗）
+            half = max(1, dmg // 2)
+            self.hp = max(0, self.hp - half)
+            fx.damage_number(self.x, self.y - 62, half)
+            fx.sparks(self.x, self.y - 34, from_dir, hot=False, n=4)
+            sfx.play("block")
+            if self.hp <= 0:
+                self.state = KO
+                self.t = 0
+                self.vy = -3.4
+                self.vx = from_dir * 2.4
+                fx.ko_burst(self.x, self.y - 30)
+                return "ko"
+            return "armor"
+
         if self.state == BLOCK and not unblockable:
             real = max(1, round(dmg * BLOCK_REDUCE))     # 格挡削血（chip）
             self.hp = max(0, self.hp - real)
-            self.guard -= GUARD_GAIN_MELEE if heavy else GUARD_GAIN_BOLT
+            self.guard -= (GUARD_GAIN_MELEE * guard_mult if heavy
+                           else GUARD_GAIN_BOLT)
             self.block_stun = BLOCK_STUN                 # 受防硬直
             self.vx = from_dir * BLOCK_PUSH
             self.combo_count = 0                         # 被防重置连段
@@ -639,6 +850,15 @@ class Mech:
             return "atk2"
         if st == AIR_MELEE:
             return "atk1" if self.t < AIR_MELEE_ACTIVE[1] else "atk2"
+        if st in (HEAVY, AIR_HEAVY, SPECIAL):    # MOVE_DEFS 驱动：按相位取帧
+            d = self.move or {}
+            w0 = d.get("windup", 9)
+            a1 = w0 + d.get("active", 5)
+            if self.t < w0:
+                return "atk0"
+            if self.t < a1:
+                return "atk1"
+            return "atk2"
         if st == SHOOT:
             return "shoot"
         if st == SUPER:

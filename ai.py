@@ -14,6 +14,7 @@ from settings import GUARD_MAX, SUPER_MAX, AI_DIFFICULTY
 PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT, PLAN_THROW, PLAN_SUPER = (
     "move", "retreat", "melee", "shoot", "block", "jump", "wait", "throw",
     "super")
+PLAN_HEAVY, PLAN_SPECIAL = "heavy", "special"
 
 
 class AIController:
@@ -94,11 +95,15 @@ class AIController:
         if dist > 150:
             if m.energy >= 35 and rng.random() < 0.35:
                 self._set_plan(PLAN_SHOOT, 8)
+            elif rng.random() < p.get("special_p", 0.0):
+                self._set_plan(PLAN_SPECIAL, 8)    # Modern 特殊技（方向+束）
             else:
                 self._set_plan(PLAN_MOVE, rng.randint(14, 26))
         elif dist > 60:
             if m.energy >= 35 and rng.random() < 0.25:
                 self._set_plan(PLAN_SHOOT, 8)
+            elif rng.random() < p.get("special_p", 0.0):
+                self._set_plan(PLAN_SPECIAL, 8)
             elif rng.random() < 0.75:
                 self._set_plan(PLAN_MOVE, rng.randint(10, 22))
             elif rng.random() < 0.85:
@@ -111,6 +116,8 @@ class AIController:
                 self._set_plan(PLAN_THROW, 6)      # 对面站桩防御就抓投
             elif m.melee_cd <= 0 and rng.random() < p["melee_p"]:
                 self._set_plan(PLAN_MELEE, 6)
+            elif rng.random() < p.get("heavy_p", 0.0):
+                self._set_plan(PLAN_HEAVY, 6)      # 重击（高伤/破防特长）
             elif rng.random() < p["block_p"]:
                 self._set_plan(PLAN_BLOCK, rng.randint(12, 24))
             elif rng.random() < 0.5:
@@ -150,6 +157,19 @@ class AIController:
                     inp["left"] = True
             else:
                 inp["melee"] = True
+        elif self.plan == PLAN_HEAVY:
+            if dist > 46:      # 前重带突进，先贴近
+                if towards > 0:
+                    inp["right"] = True
+                else:
+                    inp["left"] = True
+            inp["heavy"] = True
+        elif self.plan == PLAN_SPECIAL:
+            if towards > 0:    # 方向+光束 = 前向特殊弹（无需能量）
+                inp["right"] = True
+            else:
+                inp["left"] = True
+            inp["ranged"] = True
         elif self.plan == PLAN_SHOOT:
             inp["ranged"] = True
         elif self.plan == PLAN_THROW:

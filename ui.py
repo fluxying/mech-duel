@@ -302,7 +302,8 @@ def draw_select(surf, bg, frames, sel, t):
 
 # 按键设置界面用
 ACT_CN = {"left": "左移", "right": "右移", "jump": "跳跃", "block": "防御",
-          "melee": "斩击", "ranged": "光束", "throw": "投技", "super": "超必杀"}
+          "melee": "轻斩", "heavy": "重击", "ranged": "光束", "throw": "投技",
+          "super": "超必杀"}
 
 
 def draw_keyconfig(surf, bg, rows, idx, waiting, t):

@@ -48,6 +48,7 @@ class Projectile:
                  grav=0.0, dmg=None):
         self.owner = owner
         self.x = x
+        self.spawn_x = x              # 特殊技弹体射程基准点
         self.y = y
         self.facing = owner.facing
         self.vx = owner.facing * RANGED_SPEED if vx is None else vx
@@ -57,6 +58,8 @@ class Projectile:
         self.t = 0
         self.dead = False
         self.big = big                 # 超必杀强化弹：判定与外形放大
+        self.max_dist = None           # 特殊技射程（超出即消散）
+        self.delay_t = None            # 延时雷：静置 N 帧后消散
         self.sprites = bolts[owner.spec["bolt_color"]]
 
     def update(self, fx):
@@ -64,6 +67,14 @@ class Projectile:
         self.x += self.vx
         self.y += self.vy
         self.t += 1
+        if self.max_dist is not None and \
+                abs(self.x - self.spawn_x) >= self.max_dist:
+            self.dead = True           # 射程耗尽
+            return
+        if self.delay_t is not None and self.t >= self.delay_t:
+            self.dead = True           # 延时雷自毁
+            fx.dust(self.x, min(self.y, GROUND_Y), n=3)
+            return
         if self.grav and self.y >= GROUND_Y:   # 弧线榴弹落地爆散
             fx.dust(self.x, GROUND_Y, n=7)
             fx.sparks(self.x, GROUND_Y - 4, 1 if self.vx >= 0 else -1,

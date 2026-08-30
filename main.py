@@ -81,7 +81,7 @@ class PadMap:
     十字键/左摇杆 移动+跳+防，按钮 0/1/2/3 = 斩/束/投/超，4=防御 5=跳。"""
 
     BTN = {"melee": 0, "ranged": 1, "throw": 2, "super": 3, "block": 4,
-           "jump": 5}
+           "jump": 5, "heavy": 6}
 
     def __init__(self):
         self.joys = []
@@ -352,6 +352,10 @@ class Fight:
                 self.fx.slash(m)
             elif m.state == "air_melee" and m.t == AIR_MELEE_ACTIVE[0]:
                 self.fx.slash(m)
+            elif (m.state in ("heavy", "special", "air_heavy")
+                    and m.move is not None
+                    and m.t == m.move["windup"]):
+                self.fx.slash(m)
 
     def _separate(self):
         a, b = self.p1, self.p2
@@ -442,11 +446,41 @@ class Fight:
             if res is None:            # 对方无敌帧：判定不消耗，攻击穿透
                 continue
             atk.melee_did_hit = True
+            if res == "blocked":
+                atk.melee_blocked = True   # 被防 → 解锁被防取消
             meter(atk, dfn, res)
             if res == "hit" or res == "break":
                 self.hitstop = HITSTOP_FRAMES
                 self._rumble(0.35 if res == "hit" else 0.6,
                              90 if res == "hit" else 160)
+            elif res == "ko":
+                self._on_ko()
+        # 重击/特殊技判定（MOVE_DEFS 数据驱动：重击/前重/后重/突进技/空中重）
+        moves = []
+        for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
+            hb = atk.move_hitbox()
+            if hb is None or atk.move_did_hit:
+                continue
+            if hb.colliderect(dfn.body_rect()):
+                moves.append((atk, dfn))
+        for atk, dfn in moves:
+            if atk.move_did_hit:
+                continue
+            d = atk.move
+            res = dfn.take_damage(d["dmg"], atk.facing, self.fx, self.sfx,
+                                  heavy=True, launch=d.get("launch", False),
+                                  punish=dfn.punishable,
+                                  guard_mult=d.get("guard_mult", 1.0))
+            if res is None:            # 无敌帧：判定不消耗
+                continue
+            atk.move_did_hit = True
+            meter(atk, dfn, res)
+            if d.get("pull") and res in ("hit", "break"):
+                dfn.x = max(ARENA_LEFT, min(ARENA_RIGHT,
+                                            atk.x + atk.facing * d["pull"]))
+            if res in ("hit", "break", "armor"):
+                self.hitstop = HITSTOP_FRAMES
+                self._rumble(0.35, 90)
             elif res == "ko":
                 self._on_ko()
         # 光束判定
@@ -630,8 +664,8 @@ class Fight:
 
 # ================================================================ 选人 / 按键设置
 
-SEL_ACTS = ("left", "right", "jump", "block", "melee", "ranged", "throw",
-            "super")
+SEL_ACTS = ("left", "right", "jump", "block", "melee", "heavy", "ranged",
+            "throw", "super")
 
 
 class SelectState:
@@ -1255,13 +1289,13 @@ def selftest():
 
     # 19) 按键重映射：绑定 / 冲突交换 / 持久化往返
     kc = KeyConfigState()
-    assert len(kc.rows()) == 16, "键位行数应为 P1+P2 各 8 项"
+    assert len(kc.rows()) == 18, "键位行数应为 P1+P2 各 9 项（含重击）"
     kc.idx = 4                              # P1 melee 行
     old_melee = P1_KEYS["melee"]
     assert kc.handle(pygame.K_RETURN) is None and kc.waiting
     assert kc.handle(pygame.K_o) == "changed"
     assert P1_KEYS["melee"] == pygame.K_o and not kc.waiting, "改键未生效"
-    kc.idx = 5                              # P1 ranged 行
+    kc.idx = 6                              # P1 ranged 行（heavy 插入后）
     old_ranged = P1_KEYS["ranged"]          # 冲突交换语义：两动作互换键位
     kc.handle(pygame.K_RETURN)
     assert kc.handle(pygame.K_o) == "changed"
@@ -1422,6 +1456,156 @@ def selftest():
         "双投自动拆未生效"
     assert f24b.p1.tech_stun == THROW_TECH_LAG == f24b.p2.tech_stun
     print("[24] 投拆 + 双投自动拆: OK")
+
+    # 25) MOVE_DEFS 出招表完整性（数据驱动校验）
+    from settings import MOVE_DEFS
+    need = ("heavy", "fwd_heavy", "back_heavy", "air_heavy", "dash_light",
+            "fwd_bolt", "od")
+    for mk in MECH_ORDER:
+        d = MOVE_DEFS[mk]
+        for k in need:
+            assert k in d and d[k] is not None, f"{mk} 出招表缺 {k}"
+            mv = d[k]
+            assert mv["windup"] > 0 and mv["active"] > 0 and mv["recover"] >= 0
+            assert mv["dmg"] > 0, f"{mk}.{k} 伤害非法"
+    assert MOVE_DEFS["verdant"]["back_bolt"]["bolt"].get("mine"), \
+        "VERDANT 缺种子地雷"
+    assert not MOVE_DEFS["garnet"]["back_bolt"], "GARNET 不应有后向特殊弹"
+    assert MOVE_DEFS["garnet"]["fwd_bolt"]["bolt"]["dist"] == 90
+    print("[25] MOVE_DEFS 出招表完整性: OK")
+
+    # 26) Modern 特殊技 ×3 机甲（冲刺技/方向弹/地雷/拉近/霸体）
+    f26 = Fight("2p", frames, bg, sfx)
+    f26.phase = ACTIVE
+    f26.p1.x, f26.p2.x = 180, 300
+    for ks in ({pygame.K_d: True}, {pygame.K_d: True}, {}, {},
+               {pygame.K_d: True}):
+        f26.step(FakeKeys(ks))
+    assert f26.p1.state == "dash", "双击前未进入冲刺"
+    for _ in range(3):                     # 冲刺取消门槛 t>=4，先空走再按
+        f26.step(FakeKeys({}))
+    for _ in range(3):
+        f26.step(FakeKeys({pygame.K_j: True}))
+        if f26.p1.state == "special":
+            break
+    assert f26.p1.state == "special" and f26.p1.move_key == "dash_light", \
+        f"冲刺轻未接装甲冲撞: {f26.p1.state}/{f26.p1.move_key}"
+    # 霸体：判定相内吃一段伤害不中断
+    f26.p2.x = 210
+    f26.p2.state = "melee"
+    f26.p2.t = MELEE_WINDUP
+    f26.p2.melee_did_hit = False
+    hp0 = f26.p1.hp
+    f26.step(FakeKeys({}))
+    assert f26.p1.state == "special", f"霸体未生效: {f26.p1.state}"
+    assert hp0 - f26.p1.hp == max(1, f26.p2.spec["melee_damage"] // 2), \
+        "霸体应吃半伤"
+    # GARNET →+K 熔核喷发：弹体 + 射程 90
+    f26b = Fight("2p", frames, bg, sfx)
+    f26b.phase = ACTIVE
+    f26b.p1.ranged_cd = 0
+    for _ in range(14):
+        f26b.step(FakeKeys({pygame.K_d: True, pygame.K_k: True}))
+        if f26b.p1.state == "special":
+            break
+    assert f26b.p1.state == "special" and f26b.p1.move_key == "fwd_bolt"
+    for _ in range(12):
+        f26b.step(FakeKeys({}))
+        if f26b.fx.bolts:
+            break
+    assert f26b.fx.bolts and f26b.fx.bolts[0].dmg == 10, "熔核喷发未出弹"
+    b26 = f26b.fx.bolts[0]
+    for _ in range(80):
+        b26.update(f26b.fx)
+        if b26.dead:
+            break
+    assert b26.dead and abs(b26.x - b26.spawn_x) < 100, "射程限制未生效"
+    # VERDANT ←+K 种子地雷（静置延时）+ 冲刺拉近
+    f26c = Fight("2p", frames, bg, sfx)
+    f26c.phase = ACTIVE
+    f26c.p1 = Mech("verdant", 240, -1, frames)
+    f26c.p1.ranged_cd = 0
+    for _ in range(16):
+        f26c.step(FakeKeys({pygame.K_a: True, pygame.K_k: True}))
+        if f26c.p1.state == "special":
+            break
+    assert f26c.p1.state == "special" and f26c.p1.move_key == "back_bolt", \
+        f"VERDANT 后向布雷未触发: {f26c.p1.move_key}"
+    for _ in range(20):
+        f26c.step(FakeKeys({}))
+        if f26c.fx.bolts:
+            break
+    assert f26c.fx.bolts and f26c.fx.bolts[0].vx == 0, "地雷应为静止弹"
+    f26d = Fight("2p", frames, bg, sfx)
+    f26d.phase = ACTIVE
+    f26d.p1 = Mech("verdant", 160, 1, frames)
+    f26d.p2.x = 196
+    f26d.p1.state = "special"
+    f26d.p1.move_key = "dash_light"
+    f26d.p1.move = MOVE_DEFS["verdant"]["dash_light"]
+    f26d.p1.t = MOVE_DEFS["verdant"]["dash_light"]["windup"]
+    f26d.p1.melee_did_hit = False
+    hp0 = f26d.p2.hp
+    f26d.step(FakeKeys({}))
+    assert f26d.p2.hp < hp0 and f26d.p2.x <= 160 + 34 + 6, \
+        f"藤蔓勾拉未拉近: p2.x={f26d.p2.x}"
+    print("[26] Modern 特殊技 ×3 机甲: OK")
+
+    # 27) 取消阶梯：被防取消进特殊技 / 轻链 / 目标连段
+    f27 = Fight("2p", frames, bg, sfx)
+    f27.phase = ACTIVE
+    f27.p1.x, f27.p2.x = 200, 226
+    f27.p2.state = "block"
+    for _ in range(14):
+        f27.step(FakeKeys({pygame.K_j: True, pygame.K_DOWN: True}))
+        if f27.p1.melee_blocked:
+            break
+    assert f27.p1.melee_blocked, "轻斩未被防"
+    f27.p1.ranged_cd = 0
+    for _ in range(6):
+        f27.step(FakeKeys({pygame.K_d: True, pygame.K_k: True}))
+        if f27.p1.state == "special":
+            break
+    assert f27.p1.state == "special" and f27.p1.move_key == "fwd_bolt", \
+        f"被防取消失败: {f27.p1.state}"
+    f27b = Fight("2p", frames, bg, sfx)    # 轻命中 → 轻链
+    f27b.phase = ACTIVE
+    f27b.p1.x, f27b.p2.x = 200, 226
+    f27b.step(FakeKeys({pygame.K_j: True}))
+    for _ in range(14):
+        f27b.step(FakeKeys({}))
+        if f27b.p1.melee_did_hit:
+            break
+    assert f27b.p1.melee_did_hit, "轻斩未命中"
+    for _ in range(HITSTOP_FRAMES + 1):    # 排空命中顿帧再按键
+        f27b.step(FakeKeys({}))
+    for _ in range(4):
+        f27b.step(FakeKeys({pygame.K_j: True}))   # 松开后再按 → 链
+        if f27b.p1.chain_count == 1:
+            break
+    assert f27b.p1.chain_count == 1 and f27b.p1.state == "melee", "轻链未生效"
+    for _ in range(20):                    # 等链击落地计入连段
+        f27b.step(FakeKeys({}))
+        if f27b.p2.combo_count == 2:
+            break
+    assert f27b.p2.combo_count == 2, "链段应计入连段"
+    f27c = Fight("2p", frames, bg, sfx)    # 轻命中 → 目标连段（重）
+    f27c.phase = ACTIVE
+    f27c.p1.x, f27c.p2.x = 200, 226
+    f27c.step(FakeKeys({pygame.K_j: True}))
+    for _ in range(14):
+        f27c.step(FakeKeys({}))
+        if f27c.p1.melee_did_hit:
+            break
+    for _ in range(HITSTOP_FRAMES + 1):
+        f27c.step(FakeKeys({}))
+    for _ in range(4):
+        f27c.step(FakeKeys({pygame.K_u: True}))
+        if f27c.p1.state == "heavy":
+            break
+    assert f27c.p1.state == "heavy" and f27c.p1.move_key == "heavy", \
+        f"目标连段未生效: {f27c.p1.state}"
+    print("[27] 取消阶梯（被防取消/轻链/目标连段）: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

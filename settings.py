@@ -19,7 +19,8 @@ ROUND_TIME = 60         # 每局秒数
 ROUNDS_TO_WIN = 2       # 三局两胜
 
 # ---------------------------------------------------------------- 玩家按键
-# P1：A/D 移动  W 跳  S 防御  J 近战  K 远程  L 投技  I 超必杀（双击 A/D 冲刺/后撤）
+# P1：A/D 移动  W 跳  S 防御  J 轻斩  U 重击  K 光束  L 投技  I 超必杀
+#     （双击 A/D 冲刺/后撤；方向+键 = Modern 特殊技，见 MOVE_DEFS）
 import pygame as _pg
 
 P1_KEYS = {
@@ -28,6 +29,7 @@ P1_KEYS = {
     "jump":   _pg.K_w,
     "block":  _pg.K_s,
     "melee":  _pg.K_j,
+    "heavy":  _pg.K_u,
     "ranged": _pg.K_k,
     "throw":  _pg.K_l,
     "super":  _pg.K_i,
@@ -38,6 +40,7 @@ P2_KEYS = {
     "jump":   _pg.K_UP,
     "block":  _pg.K_DOWN,
     "melee":  _pg.K_KP1,
+    "heavy":  _pg.K_KP5,
     "ranged": _pg.K_KP2,
     "throw":  _pg.K_KP3,
     "super":  _pg.K_KP4,
@@ -218,6 +221,48 @@ def combo_scale(count):
     return max(COMBO_SCALE_MIN, 1.0 - COMBO_SCALE_STEP * count)
 
 
+# ---------------------------------------------------------------- 阶段6A：MOVE_DEFS 出招表（数据驱动）
+# 每技一行：windup/active/recover 帧 + dmg + 属性旗标。mech.py 读表出招，新增技=加行。
+# 键位指令（Modern 范式）：U=重击 →+U=前重 ←+U=后重 空中U=空中重；
+#   冲刺中J=dash_light（机体专属突进技）；→+K=fwd_bolt ←+K=back_bolt；
+#   轻+束同按+前方向=OD 强化技（6B 接入，耗 1 格 Drive）。
+# 旗标：launch=命中击倒/浮空；guard_mult=对防御槽伤害倍率；lunge/rush=判定相突进速度；
+#   armor=全程霸体（吃半伤不中断）；pull=命中拉近 px；bolt=弹体参数（speed/vy/grav/
+#   dist 射程/delay 静置延时/shots 连发数/interval 连发间隔/mine 落地布雷）。
+SPECIAL_CD = 30                  # 特殊技结束后的射击系共享冷却
+MOVE_DEFS = {
+    "garnet": {
+        "heavy":      {"name": "重击",     "windup": 14, "active": 5,  "recover": 20, "dmg": 22, "range": 44, "launch": True},
+        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 28, "range": 48, "guard_mult": 1.5, "lunge": 1.2},
+        "back_heavy": {"name": "横扫",     "windup": 15, "active": 6,  "recover": 22, "dmg": 18, "range": 46, "launch": True},
+        "air_heavy":  {"name": "踏压",     "windup": 8,  "active": 8,  "recover": 8,  "dmg": 15, "range": 36, "launch": True},
+        "dash_light": {"name": "装甲冲撞", "windup": 12, "active": 8,  "recover": 22, "dmg": 16, "range": 40, "armor": True, "launch": True, "rush": 3.2},
+        "fwd_bolt":   {"name": "熔核喷发", "windup": 10, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.2, "dist": 90}},
+        "od":         {"name": "熔核喷发EX", "windup": 8, "active": 6, "recover": 18, "dmg": 14, "bolt": {"speed": 3.4, "dist": 140, "shots": 2, "interval": 6}},
+        "back_bolt":  None,
+    },
+    "azure": {
+        "heavy":      {"name": "重击",     "windup": 12, "active": 5,  "recover": 18, "dmg": 18, "range": 42, "launch": True},
+        "fwd_heavy":  {"name": "突蹴",     "windup": 13, "active": 6,  "recover": 20, "dmg": 21, "range": 46, "lunge": 1.4},
+        "back_heavy": {"name": "对空斩",   "windup": 10, "active": 6,  "recover": 18, "dmg": 16, "range": 42, "launch": True},
+        "air_heavy":  {"name": "俯冲刃",   "windup": 7,  "active": 8,  "recover": 6,  "dmg": 14, "range": 34, "launch": True},
+        "dash_light": {"name": "相位刺",   "windup": 10, "active": 6,  "recover": 16, "dmg": 14, "range": 40, "rush": 3.6},
+        "fwd_bolt":   {"name": "裂地光刃", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 5.0, "dist": 200}},
+        "od":         {"name": "相位刺EX", "windup": 8,  "active": 8,  "recover": 18, "dmg": 18, "range": 52, "rush": 4.0, "launch": True},
+        "back_bolt":  None,
+    },
+    "verdant": {
+        "heavy":      {"name": "重击",     "windup": 13, "active": 5,  "recover": 19, "dmg": 19, "range": 43, "launch": True},
+        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 20, "range": 45, "launch": True, "lunge": 1.1},
+        "back_heavy": {"name": "扫击",     "windup": 14, "active": 6,  "recover": 20, "dmg": 17, "range": 44, "launch": True},
+        "air_heavy":  {"name": "种子散布", "windup": 6,  "active": 10, "recover": 8,  "dmg": 4,  "range": 30, "bolt": {"speed": 0, "vy": 0.6, "delay": 45, "drop": True, "shots": 2, "interval": 6}},
+        "dash_light": {"name": "藤蔓勾拉", "windup": 11, "active": 6,  "recover": 18, "dmg": 12, "range": 42, "pull": 34},
+        "fwd_bolt":   {"name": "弧线榴弹", "windup": 12, "active": 4,  "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24}},
+        "od":         {"name": "弧线榴弹EX", "windup": 10, "active": 4, "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24, "shots": 2, "interval": 8}},
+        "back_bolt":  {"name": "种子地雷", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 0, "delay": 60, "mine": True}},
+    },
+}
+
 # ---------------------------------------------------------------- 阶段3：第三机甲专属超必杀 / AI 难度
 VERDANT_SUPER_SHOTS = (12, 24)    # 两发榴弹发射帧
 VERDANT_SUPER_BOLT_DMG = 12       # 单发榴弹伤害
@@ -227,13 +272,16 @@ VERDANT_SUPER_GRAV = 0.24         # 榴弹重力（弧线弹道）
 AI_DIFFICULTY = {
     "easy":   {"react_melee": 0.015, "react_bolt": 0.020, "grab_block": 0.015,
                "grab_near": 0.35, "dodge_throw": 0.015, "decide": (16, 30),
-               "mistake": 0.30, "super_p": 0.20, "melee_p": 0.30, "block_p": 0.25},
+               "mistake": 0.30, "super_p": 0.20, "melee_p": 0.30, "block_p": 0.25,
+               "heavy_p": 0.10, "special_p": 0.08},
     "normal": {"react_melee": 0.035, "react_bolt": 0.050, "grab_block": 0.060,
                "grab_near": 0.60, "dodge_throw": 0.060, "decide": (8, 16),
-               "mistake": 0.10, "super_p": 0.45, "melee_p": 0.50, "block_p": 0.20},
+               "mistake": 0.10, "super_p": 0.45, "melee_p": 0.50, "block_p": 0.20,
+               "heavy_p": 0.20, "special_p": 0.15},
     "hard":   {"react_melee": 0.075, "react_bolt": 0.100, "grab_block": 0.120,
                "grab_near": 0.75, "dodge_throw": 0.140, "decide": (5, 11),
-               "mistake": 0.04, "super_p": 0.60, "melee_p": 0.65, "block_p": 0.10},
+               "mistake": 0.04, "super_p": 0.60, "melee_p": 0.65, "block_p": 0.10,
+               "heavy_p": 0.30, "special_p": 0.22},
 }
 
 # ---------------------------------------------------------------- 阶段4：KO 高光回放
