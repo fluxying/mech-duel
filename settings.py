@@ -104,9 +104,9 @@ MECH_SPECS = {
             1: {"name": "熔核冲击", "total": 40, "active": (8, 24),
                 "rush": 6.0, "dmg": 30},                    # = GARNET_SUPER_DMG
             2: {"name": "地裂冲击", "total": 44, "active": (8, 24),
-                "rush": 6.0, "dmg": 34, "wave": True},
+                "rush": 6.0, "dmg": 34, "wave": True, "armor": True},
             3: {"name": "熔核天崩", "total": 48, "active": (8, 24),
-                "rush": 6.0, "dmg": 50, "grab": True},
+                "rush": 6.0, "dmg": 50, "grab": True, "armor": True},
         },
     },
     "azure": {
@@ -122,13 +122,15 @@ MECH_SPECS = {
         "knockback": 3.2,
         "bolt_color": "cool",    # 光束弹配色（青蓝）
         "throw_damage": 15,      # 投技伤害（无视格挡）
-        "super_name": "苍蓝齐射",  # 超必杀：连发三道强化光束（伤害走 AZURE_SUPER_BOLT_DMG）
+        "super_name": "苍蓝射线",  # 超必杀：全屏贯穿激光（伤害走 AZURE_SUPER_DMG）
         "super_levels": {
-            1: {"name": "苍蓝齐射", "total": 40, "shots": (10, 18, 26), "dmg": 8},
-            2: {"name": "疾影齐射", "total": 44, "shots": (10, 18, 26), "dmg": 9,
-                "drift": 0.8},
-            3: {"name": "苍穹风暴", "total": 74,
-                "shots": tuple(range(10, 70, 5)), "dmg": 4},   # 12 段 ×4
+            1: {"name": "苍蓝射线", "total": 40, "shots": (12, 22),
+                "dmg": 12, "pierce": True},                 # = AZURE_SUPER_DMG ×2
+            2: {"name": "疾影射线", "total": 46, "shots": (12, 22, 32),
+                "dmg": 8, "pierce": True, "drift": 0.8},    # 滑步三连贯穿
+            3: {"name": "苍穹风暴", "total": 62,
+                "shots": (12, 17, 22, 27, 32, 37, 42, 47), "dmg": 6,
+                "pierce": True},                            # 8 连贯穿
         },
     },
     "verdant": {
@@ -144,13 +146,15 @@ MECH_SPECS = {
         "knockback": 3.4,
         "bolt_color": "acid",    # 光束弹配色（酸绿）
         "throw_damage": 16,
-        "super_name": "翠暴轰炸",  # 超必杀：两发弧线榴弹（伤害走 VERDANT_SUPER_BOLT_DMG）
+        "super_name": "翠暴轰炸",  # 超必杀：弧线榴弹 / 天降轰炸（区域覆盖型）
         "super_levels": {
-            1: {"name": "翠暴轰炸", "total": 40, "shots": (12, 24), "dmg": 12},
+            1: {"name": "翠暴轰炸", "total": 40, "shots": (12, 24), "dmg": 12,
+                "arc": True},
             2: {"name": "连天翠暴", "total": 46, "shots": (10, 16, 22, 28),
-                "dmg": 9},
-            3: {"name": "世界树降临", "total": 66,
-                "shots": tuple(range(10, 42, 4)), "dmg": 6},   # 8 段 ×6
+                "dmg": 10, "arc": True},
+            3: {"name": "世界树降临", "total": 60,
+                "shots": (14, 20, 26, 32, 38, 44), "dmg": 8,
+                "rain": True},        # 天降轰炸：落点环绕对手当前位置
         },
     },
     "violet": {
@@ -166,14 +170,17 @@ MECH_SPECS = {
         "knockback": 3.0,
         "bolt_color": "violet",  # 光束弹配色（电紫）
         "throw_damage": 16,
-        "super_name": "紫电狂涛",  # 超必杀：五连追踪小电弹
+        "super_name": "紫电狂涛",  # 超必杀：追踪电弹 / 瞬步乱舞（高速追猎型）
         "super_levels": {
             1: {"name": "紫电狂涛", "total": 42,
-                "shots": (10, 15, 20, 25, 30), "dmg": 5},
-            2: {"name": "雷霆万钧", "total": 44, "active": (8, 24),
-                "rush": 6.4, "dmg": 36},
-            3: {"name": "九天雷罚", "total": 64,
-                "shots": tuple(range(10, 60, 5)), "dmg": 5},  # 10 段 ×5
+                "shots": (10, 15, 20, 25, 30), "dmg": 4,
+                "home": True},        # 追踪电弹：弹道向对手转向
+            2: {"name": "瞬影乱舞", "total": 52,
+                "dashes": ((10, 18), (26, 34), (42, 50)),
+                "rush": 7.2, "dmg": 11},   # 三段瞬步斩击（段间可被防御）
+            3: {"name": "九天雷罚", "total": 66, "blink_t": 16,
+                "shots": (20, 25, 30, 35, 40, 45, 50, 55), "dmg": 5,
+                "home": True},        # 瞬移至对手背后 + 8 连追踪电弹
         },
     },
 }
@@ -233,14 +240,18 @@ SUPER_COST = 100
 SUPER_GAIN_HIT = 18             # 命中积攒
 SUPER_GAIN_TAKE = 12            # 受击积攒
 SUPER_GAIN_BLOCK = 6            # 格挡积攒
-SUPER_TOTAL = 40                # 超必杀动作总帧数
+SUPER_TOTAL = 40                # 超必杀动作总帧数（基准，实际以各等级 total 为准）
 SUPER_INVULN_FRAMES = 20        # 发动后无敌帧（含定格演出时间）
 SUPER_FLASH_FRAMES = 26         # 发动瞬间全局定格（演出）
 GARNET_SUPER_DMG = 30             # 熔核冲击冲撞伤害
-GARNET_SUPER_ACTIVE = (8, 24)   # 冲撞判定帧区间
-AZURE_SUPER_SHOTS = (10, 18, 26)  # 三连光束发射帧
-AZURE_SUPER_BOLT_SPEED = 5.2
-AZURE_SUPER_BOLT_DMG = 8          # 三连光束单发伤害
+# 弹体系超必杀共用参数（差异化机制见 MECH_SPECS super_levels 旗标）
+SUPER_BOLT_SPEED = 4.6            # 强化弹基准速度（追踪电弹等）
+AZURE_SUPER_DMG = 12              # 苍蓝射线单道贯穿激光伤害（Lv1 两连）
+AZURE_PIERCE_SPEED = 6.6          # 贯穿激光速度（命中后继续飞行）
+VIOLET_HOME_TURN = 0.06           # 追踪电弹每帧转向（弧度）
+VERDANT_RAIN_VY = 5.2             # 天降轰炸初速（竖直下落）
+VERDANT_RAIN_GRAV = 0.10          # 天降轰炸重力（微加速）
+RAIN_TOP = -24                    # 天降弹生成高度（屏幕外上方）
 # 破防槽（防御槽）：满槽起手，格挡消耗，耗尽则防御崩坏（大硬直，期间无法防御）
 GUARD_MAX = 100
 GUARD_REGEN = 0.15              # 每帧回复
@@ -346,8 +357,6 @@ REVERSAL_DEF = {"name": "逆转反技", "windup": 8, "active": 4, "recover": 16,
                 "dmg": DREV_DMG, "range": DREV_RANGE, "launch": True}
 
 # ---------------------------------------------------------------- 阶段3：第三机甲专属超必杀 / AI 难度
-VERDANT_SUPER_SHOTS = (12, 24)    # 两发榴弹发射帧
-VERDANT_SUPER_BOLT_DMG = 12       # 单发榴弹伤害
 VERDANT_SUPER_VY = -4.8           # 榴弹初速（向上）
 VERDANT_SUPER_GRAV = 0.24         # 榴弹重力（弧线弹道）
 # AI 难度三档：反应概率 / 决策间隔 / 失误率全部入表，架构不动

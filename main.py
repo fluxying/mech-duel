@@ -27,8 +27,8 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       AIR_MELEE_ACTIVE, AIR_MELEE_MULT, RANGED_DAMAGE,
                       RANGED_COST, ENERGY_MAX, REPLAY_FRAMES, REPLAY_HOLD,
                       SUPER_MAX, SUPER_GAIN_HIT, SUPER_GAIN_TAKE,
-                      SUPER_GAIN_BLOCK, SUPER_FLASH_FRAMES, AZURE_SUPER_BOLT_DMG,
-                      VERDANT_SUPER_BOLT_DMG, GARNET_SUPER_DMG,
+                      SUPER_GAIN_BLOCK, SUPER_FLASH_FRAMES, AZURE_SUPER_DMG,
+                      GARNET_SUPER_DMG,
                       GUARD_MAX, JUMP_SEP_Y,
                       THROW_TECH_LAG, THROW_TECH_PUSH, BLOCK_STUN,
                       PUNISH_MULT, COMBO_RESET_FRAMES, COMBO_SCALE_MIN,
@@ -369,7 +369,7 @@ class Fight:
             elif res == "blocked":
                 dfn.super = min(SUPER_MAX, dfn.super + SUPER_GAIN_BLOCK)
 
-        # 超必杀判定：GARNET 系冲撞（等级由 super_level 决定；AZURE/VERDANT 射击型走光束判定）
+        # 超必杀判定：近身型（冲撞/瞬步）走判定盒，射击型走弹体判定
         for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
             hb = atk.super_hitbox()
             if hb is None or atk.super_did_hit:
@@ -377,13 +377,16 @@ class Fight:
             if hb.colliderect(dfn.body_rect()):
                 atk.super_did_hit = True
                 lv = atk.spec["super_levels"][atk.super_level]
+                rush = "active" in lv      # 冲撞不可防+击飞；瞬步斩可防
                 res = dfn.take_damage(lv["dmg"], atk.facing,
                                       self.fx, self.sfx,
-                                      heavy=True, unblockable=True, launch=True)
+                                      heavy=True, unblockable=rush,
+                                      launch=rush)
                 self.fx.shake(8 if atk.super_level < 3 else 10)
                 if res == "ko":
                     self._on_ko()
-                meter(atk, dfn, "hit")
+                meter(atk, dfn, "hit" if res in ("hit", "break", "armor")
+                      else res)
         # Drive 冲击判定：命中大伤击飞；贴墙目标触发墙崩（眩晕 40 帧）
         for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
             hb = atk.dim_hitbox()
@@ -517,19 +520,26 @@ class Fight:
                 self._rumble(0.35, 90)
             elif res == "ko":
                 self._on_ko()
-        # 光束判定
+        # 光束判定（贯穿弹命中后继续飞行，每弹只结算一次）
         for bolt in list(self.fx.bolts):
             target = self.p2 if bolt.owner is self.p1 else self.p1
             if bolt.dead or target.state == "ko":
                 continue
+            if bolt.pierce and bolt.hit_done:
+                continue
             if bolt.rect().colliderect(target.body_rect()):
-                direction = 1 if bolt.vx > 0 else -1
+                direction = 1 if (bolt.vx > 0 or
+                                  (bolt.vx == 0 and bolt.x < target.x)) \
+                    else -1
                 res = target.take_damage(bolt.dmg, direction,
                                          self.fx, self.sfx, heavy=False,
                                          punish=target.punishable)
                 if res is None:            # 无敌帧：光束穿透不消失
                     continue
-                bolt.dead = True
+                if res == "parried" or not bolt.pierce:
+                    bolt.dead = True       # 完美格挡弹开一切弹体
+                else:
+                    bolt.hit_done = True   # 贯穿：结算后继续飞行
                 if res == "parried":       # 被完美格挡：时停 + 弹体被弹开
                     self.hitstop = PARRY_HITSTOP
                     self.fx.flash(70)
@@ -1214,25 +1224,28 @@ def selftest():
     assert f12.p2.state in ("thrown", "hurt")
     print("[12] GARNET 超必杀冲撞: OK")
 
-    # 13) AZURE 超必杀「苍蓝齐射」：三连强化光束
+    # 13) AZURE 超必杀「苍蓝射线」：全屏贯穿激光，命中后继续飞行
     f13 = Fight("2p", frames, bg, sfx)
     f13.phase = ACTIVE
     f13.p1.x, f13.p2.x = 160, 320
     f13.p2.super = SUPER_MAX
     f13.step(FakeKeys({P2_KEYS["super"]: True}))
     assert f13.p2.state == "super", f"未进入超必杀: {f13.p2.state}"
+    b13 = None
     for _ in range(90):
         f13.step(FakeKeys({}))
         if f13.fx.bolts:
+            b13 = f13.fx.bolts[0]
             break
-    assert f13.fx.bolts, "苍蓝齐射未发射"
-    assert f13.fx.bolts[0].dmg == AZURE_SUPER_BOLT_DMG and f13.fx.bolts[0].big
-    for _ in range(90):
+    assert b13 is not None, "苍蓝射线未发射"
+    assert b13.dmg == AZURE_SUPER_DMG and b13.big and b13.pierce,     "贯穿激光参数不符"
+    for _ in range(120):
         f13.step(FakeKeys({}))
-        if f13.p1.hp < f13.p1.max_hp:
+        if f13.p1.hp <= f13.p1.max_hp - 18:   # 两连命中（第二发受连段衰减）
             break
-    assert f13.p1.hp <= f13.p1.max_hp - AZURE_SUPER_BOLT_DMG, "强化光束未命中"
-    print("[13] AZURE 超必杀齐射: OK")
+    assert f13.p1.hp <= f13.p1.max_hp - 18,     "两连贯穿未全部命中"
+    assert b13.hit_done and not b13.dead, "贯穿激光应命中后继续飞行"
+    print("[13] AZURE 超必杀贯穿射线: OK")
 
     # 14) 破防槽：连续格挡耗尽防御槽 → GUARD BREAK
     f14 = Fight("2p", frames, bg, sfx)
@@ -1759,7 +1772,7 @@ def selftest():
         if f29b.p2.hp < f29b.p2.max_hp:
             break
     assert f29b.p2.hp <= f29b.p2.max_hp - 50, "Lv3 熔核天崩未命中"
-    f29c = Fight("2p", frames, bg, sfx)    # AZURE Lv3 苍穹风暴：12 连射
+    f29c = Fight("2p", frames, bg, sfx)    # AZURE Lv3 苍穹风暴：6 连贯穿
     f29c.phase = ACTIVE
     f29c.p1.x, f29c.p2.x = 140, 340
     f29c.p2.super = 300
@@ -1986,6 +1999,94 @@ def selftest():
     assert f34d.p2.hp == f34d.p2.max_hp, "完美格挡掉血"
     assert f34d.p1.stagger == _ps, "攻方未踉跄"
     print("[34] 同按合并 / 重击变体 / 击倒表现 / 格挡时停: OK")
+
+    # 35) 超必杀差异化：天降轰炸 / 追踪电弹 / 瞬步乱舞 / 瞬移背袭 / 冲撞霸体 / 滑步贯穿
+    # a) VERDANT Lv3 世界树降临：弹体自屏幕上方落下，落点环绕对手
+    f35a = Fight("2p", frames, bg, sfx, m1="verdant")
+    f35a.phase = ACTIVE
+    f35a.p1.x, f35a.p2.x = 180, ARENA_RIGHT - 24
+    f35a.p1.super = 300
+    f35a.step(FakeKeys({pygame.K_a: True, pygame.K_i: True}))
+    assert f35a.p1.state == "super" and f35a.p1.super_level == 3
+    saw_rain = False
+    for _ in range(220):
+        f35a.step(FakeKeys({}))
+        if any(b.y < GROUND_Y - 150 for b in f35a.fx.bolts):
+            saw_rain = True
+    assert saw_rain, "天降轰炸未从高空落下"
+    loss35a = f35a.p2.max_hp - f35a.p2.hp
+    assert loss35a >= 16, f"天降轰炸命中段数不足: {loss35a}"
+    # b) VIOLET Lv1 紫电狂涛：追踪电弹命中上升中的目标（直线弹会从脚下穿过）
+    f35b = Fight("2p", frames, bg, sfx, m1="violet")
+    f35b.phase = ACTIVE
+    f35b.p1.x, f35b.p2.x = 180, 300
+    f35b.p1.super = SUPER_MAX
+    f35b.step(FakeKeys({pygame.K_i: True}))
+    f35b.p2.vy = -6.2
+    f35b.p2.state = "jump"
+    hit35b = False
+    for _ in range(140):
+        f35b.step(FakeKeys({}))
+        if f35b.p2.hp < f35b.p2.max_hp:
+            hit35b = True
+            break
+    assert hit35b, "追踪电弹未命中上升目标"
+    # c) VIOLET Lv2 瞬影乱舞：三段瞬步连续命中（对手贴墙无法拉开）
+    f35c = Fight("2p", frames, bg, sfx, m1="violet")
+    f35c.phase = ACTIVE
+    f35c.p1.x, f35c.p2.x = 330, ARENA_RIGHT - 24
+    f35c.p1.super = 200
+    f35c.step(FakeKeys({pygame.K_d: True, pygame.K_i: True}))
+    assert f35c.p1.state == "super" and f35c.p1.super_level == 2
+    for _ in range(140):
+        f35c.step(FakeKeys({}))
+        if f35c.p1.state != "super":
+            break
+    loss35c = f35c.p2.max_hp - f35c.p2.hp
+    assert loss35c >= 24, f"瞬步乱舞命中段数不足: {loss35c}"
+    assert f35c.p1.x > 330, "瞬步未向前位移"
+    # d) VIOLET Lv3 九天雷罚：瞬移到对手背后再放追踪电弹
+    f35d = Fight("2p", frames, bg, sfx, m1="violet")
+    f35d.phase = ACTIVE
+    f35d.p1.x, f35d.p2.x = 160, 280
+    f35d.p1.super = 300
+    f35d.step(FakeKeys({pygame.K_a: True, pygame.K_i: True}))
+    assert f35d.p1.state == "super" and f35d.p1.super_level == 3
+    blinked = False
+    for _ in range(90):
+        f35d.step(FakeKeys({}))
+        if f35d.p1.x > f35d.p2.x and f35d.p1.facing == -1:
+            blinked = True
+            break
+    assert blinked, "九天雷罚未瞬移至对手背后"
+    # e) GARNET Lv2 地裂冲击：冲撞判定相全程霸体
+    f35e = Fight("2p", frames, bg, sfx)
+    f35e.phase = ACTIVE
+    f35e.p1.x, f35e.p2.x = 200, 320
+    f35e.p1.super = 300
+    f35e.step(FakeKeys({pygame.K_d: True, pygame.K_i: True}))
+    for _ in range(60):
+        f35e.step(FakeKeys({}))
+        if f35e.p1.state == "super" and f35e.p1.t >= 10:
+            break
+    assert f35e.p1.armor_on, "Lv2 冲撞霸体缺失"
+    # f) AZURE Lv2 疾影射线：滑步 + 三连贯穿
+    f35f = Fight("2p", frames, bg, sfx, m1="azure")
+    f35f.phase = ACTIVE
+    f35f.p1.x, f35f.p2.x = 120, 300
+    f35f.p1.super = 200
+    f35f.step(FakeKeys({pygame.K_d: True, pygame.K_i: True}))
+    assert f35f.p1.state == "super" and f35f.p1.super_level == 2
+    shots35f = 0
+    for _ in range(120):
+        f35f.step(FakeKeys({}))
+        if f35f.fx.bolts:
+            shots35f += 1
+            assert all(b.pierce for b in f35f.fx.bolts)
+            f35f.fx.bolts.clear()
+    assert shots35f >= 3, f"疾影射线连射数不足: {shots35f}"
+    assert f35f.p1.x > 120, "疾影射线未滑步"
+    print("[35] 超必杀差异化（天降/追踪/瞬步/瞬移/霸体/贯穿）: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

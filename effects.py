@@ -8,8 +8,9 @@ import pygame
 
 from settings import (RANGED_DAMAGE, RANGED_SPEED, ARENA_LEFT, ARENA_RIGHT,
                       INTERNAL_W, COLORS, GROUND_Y, BOLT_PALETTES,
-                      AZURE_SUPER_BOLT_DMG, AZURE_SUPER_BOLT_SPEED,
-                      VERDANT_SUPER_GRAV)
+                      SUPER_BOLT_SPEED, AZURE_PIERCE_SPEED,
+                      VIOLET_HOME_TURN, VERDANT_SUPER_GRAV,
+                      VERDANT_RAIN_VY, VERDANT_RAIN_GRAV, RAIN_TOP)
 from assets import build_bolts
 
 RNG = random.Random(20260829)
@@ -45,7 +46,7 @@ class Projectile:
     """光束弹。owner 为发射者，命中其对手。"""
 
     def __init__(self, owner, x, y, bolts, big=False, vx=None, vy=None,
-                 grav=0.0, dmg=None):
+                 grav=0.0, dmg=None, pierce=False, home=0.0, target=None):
         self.owner = owner
         self.x = x
         self.spawn_x = x              # 特殊技弹体射程基准点
@@ -53,16 +54,32 @@ class Projectile:
         self.facing = owner.facing
         self.vx = owner.facing * RANGED_SPEED if vx is None else vx
         self.vy = 0.0 if vy is None else vy
-        self.grav = grav              # >0 时为弧线弹道（VERDANT 榴弹）
+        self.grav = grav              # >0 时为弧线/下坠弹道（榴弹/天降轰炸）
         self.dmg = RANGED_DAMAGE if dmg is None else dmg
         self.t = 0
         self.dead = False
         self.big = big                 # 超必杀强化弹：判定与外形放大
         self.max_dist = None           # 特殊技射程（超出即消散）
         self.delay_t = None            # 延时雷：静置 N 帧后消散
+        self.pierce = pierce           # 贯穿弹：命中后继续飞行（每弹只结算一次）
+        self.hit_done = False          # 贯穿弹已结算标记
+        self.home = home               # 追踪弹每帧转向弧度（0=直线）
+        self.target = target           # 追踪目标（对手机体，读 x/y）
         self.sprites = bolts[owner.spec["bolt_color"]]
 
     def update(self, fx):
+        if self.home and self.target is not None \
+                and self.target.state != "ko" and self.target.hp > 0:
+            # 追踪转向：保持速度大小，把速度方向朝目标拉转
+            sp = math.hypot(self.vx, self.vy)
+            if sp > 0.01:
+                des = math.atan2(self.target.y - 30 - self.y,
+                                 self.target.x - self.x)
+                cur = math.atan2(self.vy, self.vx)
+                d = (des - cur + math.pi) % (2 * math.pi) - math.pi
+                turn = max(-self.home, min(self.home, d))
+                a = cur + turn
+                self.vx, self.vy = sp * math.cos(a), sp * math.sin(a)
         self.vy += self.grav
         self.x += self.vx
         self.y += self.vy
@@ -81,7 +98,7 @@ class Projectile:
                       hot=True, n=8)
             self.dead = True
             return
-        if self.t % 2 == 0:
+        if self.t % (1 if self.pierce else 2) == 0:   # 贯穿激光拖尾更密
             fx.particles.append(Particle(
                 self.x - self.facing * 5, self.y + RNG.randint(-1, 1),
                 -self.facing * 0.4, RNG.uniform(-0.2, 0.2),
@@ -235,11 +252,25 @@ class Fx:
             b.vy = min(2.4, max(0.3, (GROUND_Y - 52 - y) / 20))
         self.bolts.append(b)
 
-    def spawn_super_bolt(self, mech, x, y, idx=0, dmg=None):
-        """AZURE 系超必杀强化光束：放大判定，多连发。"""
-        b = Projectile(mech, x, y, self.bolt_sprites, big=True)
-        b.dmg = AZURE_SUPER_BOLT_DMG if dmg is None else dmg
-        b.vx = mech.facing * (AZURE_SUPER_BOLT_SPEED + idx * 0.35)
+    def spawn_pierce_bolt(self, mech, x, y, dmg):
+        """AZURE 贯穿激光：放大判定、命中后继续飞行（每弹只结算一次）。"""
+        b = Projectile(mech, x, y, self.bolt_sprites, big=True,
+                       dmg=dmg, pierce=True)
+        b.vx = mech.facing * AZURE_PIERCE_SPEED
+        self.bolts.append(b)
+
+    def spawn_home_bolt(self, mech, x, y, idx, dmg, target):
+        """VIOLET 追踪电弹：小判定 + 弹道逐帧向对手转向。"""
+        b = Projectile(mech, x, y, self.bolt_sprites, big=False,
+                       dmg=dmg, home=VIOLET_HOME_TURN, target=target)
+        b.vx = mech.facing * (SUPER_BOLT_SPEED + (idx % 3) * 0.2)
+        self.bolts.append(b)
+
+    def spawn_rain_bolt(self, mech, x, dmg):
+        """VERDANT 天降轰炸：从屏幕上方竖直砸落，落地爆散。"""
+        b = Projectile(mech, x, RAIN_TOP, self.bolt_sprites, big=True,
+                       vx=0.0, vy=VERDANT_RAIN_VY, grav=VERDANT_RAIN_GRAV,
+                       dmg=dmg)
         self.bolts.append(b)
 
     def spawn_arc_bolt(self, mech, x, y, vx, vy, dmg):

@@ -18,10 +18,7 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       AIR_MELEE_TOTAL, AIR_MELEE_ACTIVE, AIR_MELEE_MULT,
                       JUGGLE_VY, WAKE_INVULN,
                       SUPER_MAX, SUPER_TOTAL, SUPER_INVULN_FRAMES,
-                      GARNET_SUPER_ACTIVE, AZURE_SUPER_SHOTS,
-                      AZURE_SUPER_BOLT_SPEED,
-                      VERDANT_SUPER_SHOTS, VERDANT_SUPER_VY,
-                      VERDANT_SUPER_BOLT_DMG,
+                      VERDANT_SUPER_VY,
                       GUARD_MAX, GUARD_REGEN, GUARD_GAIN_MELEE, GUARD_GAIN_BOLT,
                       GUARD_BREAK_STUN, JUMP_BOOST,
                       BLOCK_STUN, BLOCK_PUSH, COMBO_RESET_FRAMES, combo_scale,
@@ -205,18 +202,25 @@ class Mech:
         return self.x + self.facing * 21, self.y - 38
 
     def super_hitbox(self):
-        """GARNET 系超必杀冲撞判定盒（AZURE/VERDANT 为射击型，无近身判定）。"""
-        if self.state != SUPER or self.spec_key != "garnet":
+        """超必杀近身判定：冲撞型（GARNET 系）全身大箱；瞬步型（VIOLET Lv2）
+        每段斩击箱；射击型（贯穿/追踪/榴弹）无近身判定，走弹体判定。"""
+        if self.state != SUPER:
             return None
         lv = self.spec["super_levels"][self.super_level]
-        a0, a1 = lv["active"]
-        if not (a0 <= self.t < a1):
-            return None
         f = self.facing
-        x0 = self.x + f * 4
-        x1 = self.x + f * 66
+        if "active" in lv:
+            a0, a1 = lv["active"]
+            if not (a0 <= self.t < a1):
+                return None
+            x0, x1, h = self.x + f * 4, self.x + f * 66, 56
+        elif "dashes" in lv:
+            if not any(s0 <= self.t < s1 for s0, s1 in lv["dashes"]):
+                return None
+            x0, x1, h = self.x + f * 2, self.x + f * 46, 52
+        else:
+            return None
         left, right = sorted((x0, x1))
-        return pygame.Rect(int(left), int(self.y) - 56, int(right - left), 56)
+        return pygame.Rect(int(left), int(self.y) - h, int(right - left), h)
 
     # ------------------------------------------------ MOVE_DEFS 出招（数据驱动）
     def _start_move(self, state, key, d=None, armor_left=0):
@@ -261,6 +265,8 @@ class Mech:
             2 if (fwd and self.super >= 200) else 1
         self.super -= SUPER_COST * lvl
         self.super_level = lvl
+        lv = self.spec["super_levels"][lvl]
+        self.armor_left = 1 if lv.get("armor") else 0   # 重装冲撞霸体（GARNET Lv2/3）
         self._enter(SUPER)
         self.super_did_hit = False
         self.super_pending = lvl         # 通知 Fight 播放对应等级演出
@@ -448,24 +454,43 @@ class Mech:
         if st == SUPER:                   # 超必杀（等级由 super_level 决定）
             lv = self.spec["super_levels"][self.super_level]
             self.t += 1
-            if "active" in lv:            # GARNET 系：判定相高速突进
+            self.armor_on = self.armor_left > 0
+            if "active" in lv:            # 冲撞型（GARNET）：判定相高速突进
                 a0, a1 = lv["active"]
                 self.vx = self.facing * lv["rush"] if a0 <= self.t < a1 else 0
                 if lv.get("wave") and self.t == a1 + 2:
                     self._fire_wave(fx)   # Lv2 地裂冲击波
-            elif "shots" in lv and lv.get("drift"):
-                self.vx = self.facing * lv["drift"]   # AZURE Lv2 移动齐射
-                if self.t in lv["shots"]:
-                    self._fire_super_shot(fx, sfx)
-            elif self.spec_key == "verdant":
+            elif "dashes" in lv:          # 瞬步乱舞（VIOLET Lv2）：段间重置判定
                 self.vx = 0
+                for s0, s1 in lv["dashes"]:
+                    if self.t == s0:
+                        self.super_did_hit = False
+                        fx.slash(self, scale=1.25)
+                        fx.dust(self.x, self.y, n=4)
+                    if s0 <= self.t < s1:
+                        self.vx = self.facing * lv["rush"]
+            elif "shots" in lv:
+                if lv.get("blink_t") == self.t:   # 瞬移到对手背后（VIOLET Lv3）
+                    side = 1 if self.x <= opponent.x else -1
+                    fx.dust(self.x, self.y, n=5)
+                    self.x = max(ARENA_LEFT, min(ARENA_RIGHT,
+                                                 opponent.x + side * 30))
+                    self.facing = -side
+                    fx.dust(self.x, self.y, n=5)
+                    fx.shake(4)
+                self.vx = self.facing * lv["drift"] if lv.get("drift") else 0
                 if self.t in lv["shots"]:
-                    self._fire_super_arc(opponent, fx, sfx)
-            else:
-                self.vx = 0
-                if self.t in lv["shots"]:
-                    self._fire_super_shot(fx, sfx)
+                    if lv.get("rain"):
+                        self._fire_rain(opponent, fx, sfx)
+                    elif lv.get("arc"):
+                        self._fire_super_arc(opponent, fx, sfx)
+                    elif lv.get("home"):
+                        self._fire_home_shot(opponent, fx, sfx)
+                    elif lv.get("pierce"):
+                        self._fire_pierce_shot(fx, sfx)
             if self.t >= lv["total"]:
+                self.armor_on = False
+                self.armor_left = 0
                 self._enter(IDLE)
             self._physics(fx)
             return
@@ -905,13 +930,34 @@ class Mech:
         self.flash = max(self.flash, 0)  # 射击不闪白
         sfx.play("shoot")
 
-    def _fire_super_shot(self, fx, sfx):
-        """AZURE 系超必杀齐射（按当前等级 def 发射强化光束）。"""
+    def _fire_pierce_shot(self, fx, sfx):
+        """AZURE 系贯穿激光：全屏直线穿透，命中后继续飞行。"""
         mx, my = self.muzzle_pos()
         dmg = self.spec["super_levels"][self.super_level]["dmg"]
-        fx.spawn_super_bolt(self, mx, my, self.t % 3, dmg=dmg)
+        fx.spawn_pierce_bolt(self, mx, my, dmg)
         fx.muzzle_flash(mx, my, self.facing)
         fx.shake(4)
+        sfx.play("shoot")
+
+    def _fire_home_shot(self, opponent, fx, sfx):
+        """VIOLET 系追踪电弹：弹道逐帧向对手转向。"""
+        lv = self.spec["super_levels"][self.super_level]
+        mx, my = self.muzzle_pos()
+        fx.spawn_home_bolt(self, mx, my, lv["shots"].index(self.t),
+                           lv["dmg"], opponent)
+        fx.muzzle_flash(mx, my, self.facing)
+        fx.shake(2)
+        sfx.play("shoot")
+
+    def _fire_rain(self, opponent, fx, sfx):
+        """VERDANT Lv3 天降轰炸：落点环绕对手当前位置，从屏幕上方砸落。"""
+        lv = self.spec["super_levels"][self.super_level]
+        idx = lv["shots"].index(self.t)
+        offs = (-6, 6, -14, 14, -26, 26)   # 内侧落点保底直击，外侧覆盖走位
+        x = max(ARENA_LEFT + 10, min(ARENA_RIGHT - 10,
+                                     opponent.x + offs[idx % len(offs)]))
+        fx.spawn_rain_bolt(self, x, lv["dmg"])
+        fx.shake(2)
         sfx.play("shoot")
 
     def _fire_super_arc(self, opponent, fx, sfx):
@@ -1081,14 +1127,21 @@ class Mech:
             return "shoot"
         if st == SUPER:
             lv = self.spec["super_levels"][self.super_level]
-            if "active" in lv:            # GARNET 系冲撞
+            if "active" in lv:            # 冲撞型：蓄势→突进→收招
                 a0, a1 = lv["active"]
                 if a0 <= self.t < a1:
                     return "atk1"
                 return "atk0" if self.t < a0 else "atk2"
+            if "dashes" in lv:            # 瞬步乱舞：瞬步窗呈斩击姿态
+                for s0, s1 in lv["dashes"]:
+                    if s0 <= self.t < s1:
+                        return "atk1"
+                return "atk0"
             first = lv["shots"][0]
-            if self.spec_key == "verdant":
-                return "atk0" if self.t < first else "shoot"
+            if lv.get("pierce"):
+                return "shoot"            # 举炮瞄准全程（狙击手感）
+            if lv.get("arc") or lv.get("rain"):
+                return "atk0" if self.t < first else "shoot"  # 装填投掷→发射
             return "shoot" if self.t >= first else "atk0"
         if st == HURT and self.knockdown:
             return "ko"                   # 击倒：躺地帧（可受身起身）
