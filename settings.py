@@ -96,8 +96,7 @@ MECH_SPECS = {
         "knockback": 3.6,
         "bolt_color": "hot",     # 光束弹配色（红橙）
         "throw_damage": 18,      # 投技伤害（无视格挡）
-        "super_name": "熔核冲击",  # 超必杀：向前冲撞，命中重创击飞
-        "super_damage": 30,
+        "super_name": "熔核冲击",  # 超必杀：向前冲撞，命中重创击飞（伤害走 GARNET_SUPER_DMG）
     },
     "azure": {
         "name": "AZURE",
@@ -188,6 +187,7 @@ SUPER_GAIN_BLOCK = 4            # 格挡积攒
 SUPER_TOTAL = 40                # 超必杀动作总帧数
 SUPER_INVULN_FRAMES = 20        # 发动后无敌帧（含定格演出时间）
 SUPER_FLASH_FRAMES = 26         # 发动瞬间全局定格（演出）
+GARNET_SUPER_DMG = 30             # 熔核冲击冲撞伤害
 GARNET_SUPER_ACTIVE = (8, 24)   # 冲撞判定帧区间
 AZURE_SUPER_SHOTS = (10, 18, 26)  # 三连光束发射帧
 AZURE_SUPER_BOLT_SPEED = 5.2

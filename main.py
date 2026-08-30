@@ -26,7 +26,8 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       RANGED_COST, ENERGY_MAX, REPLAY_FRAMES, REPLAY_HOLD,
                       SUPER_MAX, SUPER_GAIN_HIT, SUPER_GAIN_TAKE,
                       SUPER_GAIN_BLOCK, SUPER_FLASH_FRAMES, AZURE_SUPER_BOLT_DMG,
-                      VERDANT_SUPER_BOLT_DMG, GUARD_MAX, JUMP_SEP_Y)
+                      VERDANT_SUPER_BOLT_DMG, GARNET_SUPER_DMG,
+                      GUARD_MAX, JUMP_SEP_Y)
 from assets import (build_mech_frames, build_background, get_font,
                     SPRITE_W, SPRITE_H, ANCHOR_FX, PIX)
 from mech import Mech
@@ -354,7 +355,7 @@ class Fight:
                 continue
             if hb.colliderect(dfn.body_rect()):
                 atk.super_did_hit = True
-                res = dfn.take_damage(atk.spec["super_damage"], atk.facing,
+                res = dfn.take_damage(GARNET_SUPER_DMG, atk.facing,
                                       self.fx, self.sfx,
                                       heavy=True, unblockable=True, launch=True)
                 self.fx.shake(8)
@@ -1058,7 +1059,7 @@ def selftest():
         f12.step(FakeKeys({}))
         if f12.p2.hp < f12.p2.max_hp:
             break
-    assert f12.p2.hp <= f12.p2.max_hp - f12.p1.spec["super_damage"], "冲撞未命中"
+    assert f12.p2.hp <= f12.p2.max_hp - GARNET_SUPER_DMG, "冲撞未命中"
     assert f12.p2.state in ("thrown", "hurt")
     print("[12] GARNET 超必杀冲撞: OK")
 
