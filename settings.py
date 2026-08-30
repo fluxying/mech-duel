@@ -112,8 +112,7 @@ MECH_SPECS = {
         "knockback": 3.2,
         "bolt_color": "cool",    # 光束弹配色（青蓝）
         "throw_damage": 15,      # 投技伤害（无视格挡）
-        "super_name": "苍蓝齐射",  # 超必杀：连发三道强化光束
-        "super_damage": 7,       # 每发光束伤害（共 3 发）
+        "super_name": "苍蓝齐射",  # 超必杀：连发三道强化光束（伤害走 AZURE_SUPER_BOLT_DMG）
     },
     "verdant": {
         "name": "VERDANT",
@@ -128,8 +127,7 @@ MECH_SPECS = {
         "knockback": 3.4,
         "bolt_color": "acid",    # 光束弹配色（酸绿）
         "throw_damage": 16,
-        "super_name": "翠暴轰炸",  # 超必杀：两发弧线榴弹砸向对手当前位置
-        "super_damage": 12,      # 单发榴弹伤害（共 2 发）
+        "super_name": "翠暴轰炸",  # 超必杀：两发弧线榴弹（伤害走 VERDANT_SUPER_BOLT_DMG）
     },
 }
 
