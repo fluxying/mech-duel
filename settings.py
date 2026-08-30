@@ -19,7 +19,7 @@ ROUND_TIME = 60         # 每局秒数
 ROUNDS_TO_WIN = 2       # 三局两胜
 
 # ---------------------------------------------------------------- 玩家按键
-# P1：A/D 移动  W 跳  S 防御  J 近战  K 远程  L 投技（双击 A/D 冲刺/后撤）
+# P1：A/D 移动  W 跳  S 防御  J 近战  K 远程  L 投技  I 超必杀（双击 A/D 冲刺/后撤）
 import pygame as _pg
 
 P1_KEYS = {
@@ -30,6 +30,7 @@ P1_KEYS = {
     "melee":  _pg.K_j,
     "ranged": _pg.K_k,
     "throw":  _pg.K_l,
+    "super":  _pg.K_i,
 }
 P2_KEYS = {
     "left":   _pg.K_LEFT,
@@ -39,6 +40,7 @@ P2_KEYS = {
     "melee":  _pg.K_1,
     "ranged": _pg.K_2,
     "throw":  _pg.K_3,
+    "super":  _pg.K_4,
 }
 
 # ---------------------------------------------------------------- 机甲规格
@@ -50,12 +52,14 @@ MECH_SPECS = {
         "palette": "p1",
         "hp": 120,
         "walk_speed": 1.35,      # px / frame
-        "jump_power": 5.3,
+        "jump_power": 6.0,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
         "melee_damage": 12,
         "melee_range": 40,       # 判定盒前端离中心的距离
         "knockback": 3.6,
         "bolt_color": "hot",     # 光束弹配色（红橙）
         "throw_damage": 18,      # 投技伤害（无视格挡）
+        "super_name": "熔核冲击",  # 超必杀：向前冲撞，命中重创击飞
+        "super_damage": 30,
     },
     "azure": {
         "name": "AZURE",
@@ -63,12 +67,14 @@ MECH_SPECS = {
         "palette": "p2",
         "hp": 100,
         "walk_speed": 1.7,
-        "jump_power": 5.6,
+        "jump_power": 6.3,       # 提高跳跃高度，保证能越过对手头顶（体高 56px）
         "melee_damage": 9,
         "melee_range": 40,
         "knockback": 3.2,
         "bolt_color": "cool",    # 光束弹配色（青蓝）
         "throw_damage": 15,      # 投技伤害（无视格挡）
+        "super_name": "苍蓝齐射",  # 超必杀：连发三道强化光束
+        "super_damage": 7,       # 每发光束伤害（共 3 发）
     },
 }
 
@@ -90,6 +96,8 @@ HITSTOP_FRAMES = 5              # 命中顿帧
 KO_SLOW_FRAMES = 80             # KO 慢镜头时长
 PUSHBOX_W = 22                  # 机体推挤盒宽度
 MIN_SEPARATION = 26             # 两机甲最小间距
+JUMP_SEP_Y = 30                 # 推挤生效的最大高度差（跳过对手的关键窗口）
+JUMP_BOOST = 1.3                # 起跳水平动量加成（空中速度上限同步放宽）
 
 # ---------------------------------------------------------------- 阶段1：投技/冲刺/后撤/空中攻击
 # 投技：抓取范围内地面目标，无视格挡（可被跳跃/后撤步躲开）
@@ -111,6 +119,32 @@ BACKSTEP_INVULN = (2, 11)       # 无敌帧区间 [起, 止)
 AIR_MELEE_TOTAL = 20
 AIR_MELEE_ACTIVE = (4, 14)      # 判定帧区间
 AIR_MELEE_MULT = 0.75           # 伤害倍率（基于 melee_damage）
+
+# ---------------------------------------------------------------- 阶段2：取消连段/浮空受身/超必杀/破防
+# 取消连段：斩击命中后，后摇期间可取消出光束/跳跃（未命中不可取消）
+CANCEL_ALLOWED = "hit"          # 仅命中后允许取消
+# 浮空追打（juggle）：空中目标被命中 → 向上刷新浮空
+JUGGLE_VY = -2.8
+# 受身：落地硬直中按跳跃键提前起身，带起身无敌
+WAKE_INVULN = 20                # 受身起身无敌帧
+# 超必杀：独立 SUPER 槽，命中/受击/格挡积攒，满 100 释放
+SUPER_MAX = 100
+SUPER_GAIN_HIT = 12             # 命中积攒
+SUPER_GAIN_TAKE = 8             # 受击积攒
+SUPER_GAIN_BLOCK = 4            # 格挡积攒
+SUPER_TOTAL = 40                # 超必杀动作总帧数
+SUPER_INVULN_FRAMES = 20        # 发动后无敌帧（含定格演出时间）
+SUPER_FLASH_FRAMES = 26         # 发动瞬间全局定格（演出）
+GARNET_SUPER_ACTIVE = (8, 24)   # 冲撞判定帧区间
+AZURE_SUPER_SHOTS = (10, 18, 26)  # 三连光束发射帧
+AZURE_SUPER_BOLT_SPEED = 5.2
+AZURE_SUPER_BOLT_DMG = 8          # 三连光束单发伤害
+# 破防槽（防御槽）：满槽起手，格挡消耗，耗尽则防御崩坏（大硬直，期间无法防御）
+GUARD_MAX = 100
+GUARD_REGEN = 0.15              # 每帧回复
+GUARD_GAIN_MELEE = 22           # 格挡一次近战
+GUARD_GAIN_BOLT = 11            # 格挡一发光束
+GUARD_BREAK_STUN = 55           # 破防硬直帧
 
 # ---------------------------------------------------------------- 颜色
 COLORS = {

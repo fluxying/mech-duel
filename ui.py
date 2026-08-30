@@ -4,13 +4,16 @@
 import pygame
 
 from settings import (INTERNAL_W, INTERNAL_H, COLORS, ROUND_TIME,
-                      ROUNDS_TO_WIN, RANGED_COST, ENERGY_MAX)
+                      ROUNDS_TO_WIN, RANGED_COST, ENERGY_MAX,
+                      GUARD_MAX, SUPER_MAX)
 from assets import get_font, SPRITE_H
 
 BAR_MARGIN = 14
 BAR_W = 176
 BAR_H = 11
 ENERGY_H = 5
+GUARD_H = 4
+SUPER_H = 3
 
 
 class HUD:
@@ -61,10 +64,34 @@ class HUD:
         pygame.draw.rect(surf, COLORS["hud_bg"], (x0 - 2, ey - 1, BAR_W + 4, ENERGY_H + 2))
         e_w = int(BAR_W * m.energy / ENERGY_MAX)
         e_col = COLORS["energy"] if m.energy >= RANGED_COST else COLORS["energy_low"]
+        if m.energy >= ENERGY_MAX:            # 能量满：超必杀就绪闪烁提示
+            blink = (pygame.time.get_ticks() // 260) % 2 == 0
+            e_col = (255, 255, 240) if blink else (255, 214, 100)
         if left:
             surf.fill(e_col, (x0, ey, e_w, ENERGY_H))
         else:
             surf.fill(e_col, (x0 + BAR_W - e_w, ey, e_w, ENERGY_H))
+
+        # 防御槽（耗尽 → GUARD BREAK）
+        gy = ey + ENERGY_H + 2
+        pygame.draw.rect(surf, COLORS["hud_bg"], (x0 - 2, gy - 1, BAR_W + 4, GUARD_H + 2))
+        g_w = int(BAR_W * max(0, m.guard) / GUARD_MAX)
+        g_col = ((230, 90, 70) if m.guard <= GUARD_MAX * 0.3
+                 else (150, 150, 175))
+        if left:
+            surf.fill(g_col, (x0, gy, g_w, GUARD_H))
+        else:
+            surf.fill(g_col, (x0 + BAR_W - g_w, gy, g_w, GUARD_H))
+
+        # 超必杀槽
+        sy = gy + GUARD_H + 2
+        pygame.draw.rect(surf, COLORS["hud_bg"], (x0 - 2, sy - 1, BAR_W + 4, SUPER_H + 2))
+        s_w = int(BAR_W * m.super / SUPER_MAX)
+        s_col = (255, 214, 100) if m.super >= SUPER_MAX else (200, 160, 90)
+        if left:
+            surf.fill(s_col, (x0, sy, s_w, SUPER_H))
+        else:
+            surf.fill(s_col, (x0 + BAR_W - s_w, sy, s_w, SUPER_H))
 
         # 名字
         name = f"{m.spec['name']}·{m.spec['cn_name']}"
@@ -76,7 +103,7 @@ class HUD:
             surf.blit(img, (x0 + BAR_W - img.get_width(), y0 - 11))
 
     def _pips(self, surf, wins, left):
-        y = 10 + BAR_H + 3 + ENERGY_H + 6
+        y = 10 + BAR_H + 3 + ENERGY_H + 2 + GUARD_H + 2 + SUPER_H + 2 + 4
         for i in range(ROUNDS_TO_WIN):
             size = 5
             if left:
@@ -153,9 +180,11 @@ def draw_menu(surf, bg, frames, t):
     surf.blit(h1, (cx - h1.get_width() // 2, 198))
     surf.blit(h2, (cx - h2.get_width() // 2, 212))
     h4 = fnt_help.render("双击方向 冲刺/后撤 · 空中可斩击 · 投技无视防御", True, (255, 214, 100))
-    surf.blit(h4, (cx - h4.get_width() // 2, 226))
+    surf.blit(h4, (cx - h4.get_width() // 2, 222))
+    h5 = fnt_help.render("I/4 超必杀(槽满) · 落地按跳/防 受身起身 · 被投可拆", True, (170, 220, 255))
+    surf.blit(h5, (cx - h5.get_width() // 2, 236))
     h3 = fnt_help.render("三局两胜 · 每局 60 秒 · R 重开  ESC 菜单", True, (170, 170, 190))
-    surf.blit(h3, (cx - h3.get_width() // 2, 240))
+    surf.blit(h3, (cx - h3.get_width() // 2, 250))
 
 
 def draw_victory(surf, bg, winner_spec, wins1, wins2):

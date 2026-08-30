@@ -7,7 +7,8 @@ import random
 import pygame
 
 from settings import (RANGED_DAMAGE, RANGED_SPEED, ARENA_LEFT, ARENA_RIGHT,
-                      INTERNAL_W, COLORS)
+                      INTERNAL_W, COLORS, GROUND_Y,
+                      AZURE_SUPER_BOLT_DMG, AZURE_SUPER_BOLT_SPEED)
 from assets import build_bolts
 
 RNG = random.Random(20260829)
@@ -42,19 +43,22 @@ class Particle:
 class Projectile:
     """光束弹。owner 为发射者，命中其对手。"""
 
-    def __init__(self, owner, x, y, bolts):
+    def __init__(self, owner, x, y, bolts, big=False):
         self.owner = owner
         self.x = x
         self.y = y
         self.facing = owner.facing
         self.vx = owner.facing * RANGED_SPEED
+        self.vy = 0.0                # 空中射击：斜向下弹道
         self.dmg = RANGED_DAMAGE
         self.t = 0
         self.dead = False
+        self.big = big                 # 超必杀强化弹：判定与外形放大
         self.sprites = bolts[owner.spec["bolt_color"]]
 
     def update(self, fx):
         self.x += self.vx
+        self.y += self.vy
         self.t += 1
         if self.t % 2 == 0:
             fx.particles.append(Particle(
@@ -69,11 +73,19 @@ class Projectile:
         return pal["hot"] if self.owner.spec["bolt_color"] == "hot" else pal["cool"]
 
     def rect(self):
+        if self.big:
+            return pygame.Rect(int(self.x) - 9, int(self.y) - 4, 18, 8)
         return pygame.Rect(int(self.x) - 5, int(self.y) - 2, 10, 5)
 
     def draw(self, surf):
         img = self.sprites[(self.t // 3) % 2][self.facing]
-        surf.blit(img, (int(self.x) - 10, int(self.y) - 5))
+        if self.big:
+            img = pygame.transform.scale(
+                img, (img.get_width() * 2, img.get_height() * 2))
+            surf.blit(img, (int(self.x) - img.get_width() // 2,
+                            int(self.y) - img.get_height() // 2))
+        else:
+            surf.blit(img, (int(self.x) - 10, int(self.y) - 5))
 
 
 class Slash:
@@ -149,6 +161,7 @@ class Fx:
         self.dmg_numbers = []
         self.bolt_sprites = build_bolts()
         self.shake_mag = 0.0
+        self.flash_a = 0.0             # 全屏白闪强度（超必杀演出）
         self._font = None
 
     def clear(self):
@@ -158,10 +171,27 @@ class Fx:
         self.slashes.clear()
         self.dmg_numbers.clear()
         self.shake_mag = 0
+        self.flash_a = 0
 
     # ---------------- 生成接口 ----------------
     def spawn_bolt(self, mech, x, y):
-        self.bolts.append(Projectile(mech, x, y, self.bolt_sprites))
+        b = Projectile(mech, x, y, self.bolt_sprites)
+        if not mech.grounded:
+            # 空中射击：弹道斜向下。下坠分量按「炮口到目标头顶线」的高度差算，
+            # 大致在 ~84px（20×弹速）的水平飞行距离内落到目标头顶线
+            b.vy = min(2.4, max(0.3, (GROUND_Y - 52 - y) / 20))
+        self.bolts.append(b)
+
+    def spawn_super_bolt(self, mech, x, y, idx=0):
+        """AZURE 超必杀强化光束：放大判定，三发速度递增。"""
+        b = Projectile(mech, x, y, self.bolt_sprites, big=True)
+        b.dmg = AZURE_SUPER_BOLT_DMG
+        b.vx = mech.facing * (AZURE_SUPER_BOLT_SPEED + idx * 0.35)
+        self.bolts.append(b)
+
+    def flash(self, alpha):
+        """全屏白闪（超必杀发动演出）。"""
+        self.flash_a = max(self.flash_a, alpha)
 
     def muzzle_flash(self, x, y, facing):
         for _ in range(6):
@@ -229,7 +259,7 @@ class Fx:
         self.shake_mag = max(self.shake_mag, mag)
 
     # ---------------- 更新与绘制 ----------------
-    def update(self):
+    def update(self, frozen=False):
         for p in self.particles:
             p.update()
         self.particles = [p for p in self.particles if p.life > 0]
@@ -245,6 +275,10 @@ class Fx:
         self.shake_mag *= 0.82
         if self.shake_mag < 0.3:
             self.shake_mag = 0
+        if not frozen:                    # 定格演出期间白闪保持
+            self.flash_a *= 0.86
+            if self.flash_a < 2:
+                self.flash_a = 0
 
     def shake_offset(self):
         if self.shake_mag <= 0:

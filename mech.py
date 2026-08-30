@@ -15,15 +15,22 @@ from settings import (GRAVITY, GROUND_Y, ARENA_LEFT, ARENA_RIGHT,
                       THROW_VX, THROW_VY, THROWN_LAND_STUN,
                       TAP_WINDOW, DASH_FRAMES, DASH_SPEED,
                       BACKSTEP_FRAMES, BACKSTEP_SPEED, BACKSTEP_INVULN,
-                      AIR_MELEE_TOTAL, AIR_MELEE_ACTIVE, AIR_MELEE_MULT)
+                      AIR_MELEE_TOTAL, AIR_MELEE_ACTIVE, AIR_MELEE_MULT,
+                      JUGGLE_VY, WAKE_INVULN,
+                      SUPER_MAX, SUPER_TOTAL, SUPER_INVULN_FRAMES,
+                      GARNET_SUPER_ACTIVE, AZURE_SUPER_SHOTS,
+                      AZURE_SUPER_BOLT_SPEED,
+                      GUARD_MAX, GUARD_REGEN, GUARD_GAIN_MELEE, GUARD_GAIN_BOLT,
+                      GUARD_BREAK_STUN, JUMP_BOOST)
 from assets import SPRITE_W, SPRITE_H, ANCHOR_FX, PIX
 
 IDLE, WALK, JUMP, MELEE, SHOOT, BLOCK, HURT, KO = (
     "idle", "walk", "jump", "melee", "shoot", "block", "hurt", "ko")
 THROW, DASH, BACKSTEP, AIR_MELEE, THROWN = (
     "throw", "dash", "backstep", "air_melee", "thrown")
+SUPER, GBREAK = "super", "guard_break"
 
-# 状态 -> 动画帧序列 [(帧名, 时长帧)]；MELEE/THROW/AIR_MELEE 相位由 t 直接推算
+# 状态 -> 动画帧序列 [(帧名, 时长帧)]；MELEE/THROW/AIR_MELEE/SUPER 相位由 t 直接推算
 ANIMS = {
     IDLE:      [("idle", 36), ("idle", 36)],
     WALK:      [("walk_a", 9), ("walk_b", 9)],
@@ -36,6 +43,8 @@ ANIMS = {
     DASH:      [("walk_a", 4), ("walk_b", 4)],
     BACKSTEP:  [("jump", 4)],
     THROWN:    [("hurt", 4)],
+    SUPER:     [("atk0", 8), ("atk1", 20), ("atk2", 12)],
+    GBREAK:    [("hurt", 4)],
 }
 
 MELEE_TOTAL = MELEE_WINDUP + MELEE_ACTIVE + MELEE_RECOVER
@@ -64,6 +73,8 @@ class Mech:
         self.facing = facing
         self.hp = self.max_hp
         self.energy = ENERGY_MAX
+        self.super = 0               # 超必杀槽
+        self.guard = GUARD_MAX       # 破防值槽
         self.state = IDLE
         self.t = 0                # 状态内计时
         self.anim_t = 0
@@ -74,11 +85,17 @@ class Mech:
         self.throw_cd = 0
         self.melee_did_hit = False
         self.throw_hit_done = False
+        self.super_did_hit = False
+        self.super_pending = False   # 通知 Fight 播放定格演出
+        self.wake_invuln = 0         # 受身起身无敌剩余帧
+        self._air_hurt = False       # 浮空受击标记（落地后允许受身）
+        self._ground_t = 0           # HURT 落地后的帧数（受身窗口）
         self.age = 0              # 总帧数（双击检测用）
         self._prev_input = {}     # 上一帧输入（新按下检测）
         self._tap_age = {}        # 方向 -> 上次单按帧号
         self.input = {k: False for k in
-                      ("left", "right", "jump", "block", "melee", "ranged", "throw")}
+                      ("left", "right", "jump", "block", "melee", "ranged",
+                       "throw", "super")}
 
     # ------------------------------------------------ 辅助量
     @property
@@ -91,9 +108,12 @@ class Mech:
 
     @property
     def invuln(self):
-        """后撤步中段为无敌帧（投射物与近战均穿透）。"""
-        return (self.state == BACKSTEP
-                and BACKSTEP_INVULN[0] <= self.t < BACKSTEP_INVULN[1])
+        """无敌帧：后撤步中段 / 受身起身 / 超必杀发动初期。"""
+        if self.state == BACKSTEP and BACKSTEP_INVULN[0] <= self.t < BACKSTEP_INVULN[1]:
+            return True
+        if self.wake_invuln > 0:
+            return True
+        return self.state == SUPER and self.t < SUPER_INVULN_FRAMES
 
     @property
     def palette(self):
@@ -127,6 +147,18 @@ class Mech:
         """炮口世界坐标（用于光束弹生成与炮口焰）。"""
         return self.x + self.facing * 21, self.y - 38
 
+    def super_hitbox(self):
+        """GARNET 超必杀冲撞判定盒（AZURE 为射击型，无近身判定）。"""
+        if self.state != SUPER or self.spec_key != "garnet":
+            return None
+        if not (GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]):
+            return None
+        f = self.facing
+        x0 = self.x + f * 4
+        x1 = self.x + f * 66
+        left, right = sorted((x0, x1))
+        return pygame.Rect(int(left), int(self.y) - 56, int(right - left), 56)
+
     # ------------------------------------------------ 主更新
     def update(self, opponent, fx, sfx):
         self.age += 1
@@ -138,6 +170,10 @@ class Mech:
             self.throw_cd -= 1
         if self.flash > 0:
             self.flash -= 1
+        if self.wake_invuln > 0:
+            self.wake_invuln -= 1
+        if self.state != BLOCK:
+            self.guard = min(GUARD_MAX, self.guard + GUARD_REGEN)  # 防御槽回复
         self.energy = min(ENERGY_MAX, self.energy + ENERGY_REGEN)
 
         inp = self.input
@@ -147,7 +183,8 @@ class Mech:
         self._prev_input = dict(inp)
 
         # 面向对手（动作进行中锁定朝向）
-        if st not in (MELEE, SHOOT, THROW, DASH, BACKSTEP, AIR_MELEE, THROWN, KO):
+        if st not in (MELEE, SHOOT, THROW, DASH, BACKSTEP, AIR_MELEE, THROWN,
+                      SUPER, GBREAK, KO):
             self.facing = 1 if opponent.x >= self.x else -1
 
         if st == KO:
@@ -158,7 +195,43 @@ class Mech:
         if st == HURT:
             self.t += 1
             self.vx *= 0.86
-            if self.t >= HURT_STUN + self._stun_extra and self.grounded:
+            if self.grounded:
+                self._ground_t += 1
+                # 受身：浮空受击/被投落地后 12 帧内按住跳/防 → 快速起身+无敌
+                if (self._air_hurt and self._ground_t <= 12
+                        and (inp["jump"] or inp["block"])):
+                    self._enter(IDLE)
+                    self.wake_invuln = WAKE_INVULN
+                    fx.dust(self.x, self.y, n=3)
+                    self._physics(fx)
+                    return
+                if self.t >= HURT_STUN + self._stun_extra:
+                    self._enter(IDLE)
+            else:
+                self._ground_t = 0
+            self._physics(fx)
+            return
+
+        if st == GBREAK:                  # 防御崩坏：大硬直，无法防御
+            self.t += 1
+            self.vx *= 0.85
+            if self.t >= GUARD_BREAK_STUN and self.grounded:
+                self._enter(IDLE)
+            self._physics(fx)
+            return
+
+        if st == SUPER:                   # 超必杀（发动演出由 Fight 处理）
+            self.t += 1
+            if self.spec_key == "garnet":
+                # 熔核冲击：判定相高速突进
+                self.vx = (self.facing * 6.0
+                           if GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]
+                           else 0)
+            else:
+                self.vx = 0
+                if self.t in AZURE_SUPER_SHOTS:
+                    self._fire_super_shot(fx, sfx)
+            if self.t >= SUPER_TOTAL:
                 self._enter(IDLE)
             self._physics(fx)
             return
@@ -170,6 +243,27 @@ class Mech:
                 self.vx = self.facing * 0.9
             else:
                 self.vx = 0
+            # 命中取消：命中后的后摇期可接光束/投技/跳跃（连段核心）
+            if (self.melee_did_hit and self.grounded
+                    and MELEE_WINDUP <= self.t < MELEE_TOTAL):
+                if (inp["ranged"] and self.ranged_cd <= 0
+                        and self.energy >= RANGED_COST):
+                    self._enter(SHOOT)
+                    self._physics(fx)
+                    return
+                if inp["throw"] and self.throw_cd <= 0:
+                    self._enter(THROW)
+                    self.throw_hit_done = False
+                    self._physics(fx)
+                    return
+                if inp["jump"]:
+                    self.vy = -self.spec["jump_power"] * 0.85
+                    self.y -= 0.1
+                    fx.dust(self.x, self.y, n=4)
+                    sfx.play("jump")
+                    self._enter(JUMP)
+                    self._physics(fx)
+                    return
             if self.t >= MELEE_TOTAL:
                 self.melee_cd = MELEE_COOLDOWN
                 self._enter(IDLE)
@@ -178,7 +272,10 @@ class Mech:
 
         if st == SHOOT:
             self.t += 1
-            self.vx = 0
+            if self.grounded:
+                self.vx = 0
+            else:
+                self.vx *= 0.96        # 空中射击保留水平动量（缓衰）
             if self.t == SHOOT_FIRE_T:
                 self._fire(fx, sfx)
             if self.t >= SHOOT_TOTAL:
@@ -192,11 +289,15 @@ class Mech:
             self.vx *= 0.99
             self._physics(fx)
             if self.grounded:
-                self._enter(HURT)
-                self._stun_extra = THROWN_LAND_STUN
-                fx.dust(self.x, GROUND_Y, n=6)
-                fx.shake(4)
-                sfx.play("hit")
+                if self.t >= 2 and (inp["jump"] or inp["block"]):
+                    self._enter(IDLE)     # 被投落地也可受身
+                    self.wake_invuln = WAKE_INVULN
+                else:
+                    self._enter(HURT)
+                    self._stun_extra = THROWN_LAND_STUN
+                    fx.dust(self.x, GROUND_Y, n=6)
+                    fx.shake(4)
+                    sfx.play("hit")
             return
 
         if st == THROW:                   # 投技出招（抓取判定在 Fight._combat）
@@ -260,6 +361,15 @@ class Mech:
             return
 
         # ---- 可自由行动：IDLE / WALK / JUMP / BLOCK ----
+        # 超必杀：槽满 + 专用键（最高优先级），发动即清空槽位
+        if (inp["super"] and self.grounded and self.super >= SUPER_MAX):
+            self.super = 0
+            self._enter(SUPER)
+            self.super_did_hit = False
+            self.super_pending = True    # 通知 Fight 播放发动演出
+            self._physics(fx)
+            return
+
         # 双击方向 → 前冲 / 后撤步（仅地面自由态）
         if (self.grounded and st in (IDLE, WALK)
                 and (("left" in fresh) ^ ("right" in fresh))):
@@ -292,6 +402,7 @@ class Mech:
             self._enter(SHOOT)
         elif inp["jump"] and self.grounded:
             self.vy = -self.spec["jump_power"]
+            self.vx *= JUMP_BOOST            # 起跳动量：保留并放大水平速度
             self.y -= 0.1
             fx.dust(self.x, self.y, n=5)
             sfx.play("jump")
@@ -315,10 +426,15 @@ class Mech:
             if inp["melee"] and self.melee_cd <= 0:
                 self._enter(AIR_MELEE)          # 空中下劈
                 self.melee_did_hit = False
+            elif (inp["ranged"] and self.ranged_cd <= 0
+                  and self.energy >= RANGED_COST):
+                self._enter(SHOOT)              # 空中射击
             elif inp["left"]:
-                self.vx = max(self.vx - 0.12, -self.spec["walk_speed"])
+                air_cap = self.spec["walk_speed"] * JUMP_BOOST
+                self.vx = max(self.vx - 0.12, -air_cap)
             elif inp["right"]:
-                self.vx = min(self.vx + 0.12, self.spec["walk_speed"])
+                air_cap = self.spec["walk_speed"] * JUMP_BOOST
+                self.vx = min(self.vx + 0.12, air_cap)
 
         self._physics(fx)
 
@@ -345,14 +461,24 @@ class Mech:
     def _fire(self, fx, sfx):
         self.energy -= RANGED_COST
         mx, my = self.muzzle_pos()
+        # 空中射击弹道斜向下：下坠分量在 effects.spawn_bolt 中按高度计算
         fx.spawn_bolt(self, mx, my)
         fx.muzzle_flash(mx, my, self.facing)
         self.flash = max(self.flash, 0)  # 射击不闪白
         sfx.play("shoot")
 
+    def _fire_super_shot(self, fx, sfx):
+        """AZURE 超必杀「苍蓝齐射」：三连强化光束之一。"""
+        idx = AZURE_SUPER_SHOTS.index(self.t)
+        mx, my = self.muzzle_pos()
+        fx.spawn_super_bolt(self, mx, my, idx)
+        fx.muzzle_flash(mx, my, self.facing)
+        fx.shake(4)
+        sfx.play("shoot")
+
     def take_damage(self, dmg, from_dir, fx, sfx, heavy=False,
                     unblockable=False, launch=False):
-        """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'ko' / None。
+        """from_dir: 击退方向（+1 向右）。返回 'hit' / 'blocked' / 'break' / 'ko' / None。
 
         unblockable: 无视格挡（投技）；launch: 击飞浮空（被投）；
         无敌帧期间直接返回 None（攻击穿透，不消耗攻击方判定）。
@@ -365,10 +491,18 @@ class Mech:
         if self.state == BLOCK and not unblockable:
             real = max(1, round(dmg * BLOCK_REDUCE))     # 格挡削血（chip）
             self.hp = max(0, self.hp - real)
+            self.guard -= GUARD_GAIN_MELEE if heavy else GUARD_GAIN_BOLT
             self.vx = from_dir * 1.3
             fx.block_spark(self.x + self.facing * 14, self.y - 34)
             fx.damage_number(self.x, self.y - 62, real, blocked=True)
             sfx.play("block")
+            if self.guard <= 0:              # GUARD BREAK：防御崩坏
+                self.guard = 0
+                self.state = GBREAK
+                self.t = 0
+                fx.shake(6)
+                sfx.play("break")
+                return "break"
             return "blocked"
 
         self.hp = max(0, self.hp - dmg)
@@ -385,10 +519,12 @@ class Mech:
             self.vx = from_dir * 2.4
             fx.ko_burst(self.x, self.y - 30)
             return "ko"
-        if launch:                       # 被投飞：浮空坠落
+        if launch:                       # 被投飞/超必杀击飞：浮空坠落
             self.state = THROWN
             self.t = 0
             self._stun_extra = 0
+            self._air_hurt = True
+            self._ground_t = 0
             self.vy = THROW_VY
             self.vx = from_dir * THROW_VX
             fx.throw_impact(self.x, self.y - 30)
@@ -396,6 +532,11 @@ class Mech:
         self.state = HURT
         self.t = 0
         self._stun_extra = 6 if heavy else 0
+        self._air_hurt = not self.grounded
+        self._ground_t = 0
+        if not self.grounded:            # 空中追打（juggle）：向上刷新浮空
+            self.vy = JUGGLE_VY
+            self.vx = from_dir * self.spec["knockback"] * 0.5
         return "hit"
 
     # ------------------------------------------------ 绘制
@@ -417,6 +558,14 @@ class Mech:
             return "atk1" if self.t < AIR_MELEE_ACTIVE[1] else "atk2"
         if st == SHOOT:
             return "shoot"
+        if st == SUPER:
+            if self.spec_key == "garnet":
+                if GARNET_SUPER_ACTIVE[0] <= self.t < GARNET_SUPER_ACTIVE[1]:
+                    return "atk1"
+                return "atk0" if self.t < GARNET_SUPER_ACTIVE[0] else "atk2"
+            return "shoot" if self.t >= AZURE_SUPER_SHOTS[0] else "atk0"
+        if st == GBREAK:
+            return "hurt"
         seq = ANIMS[st]
         # 帧循环
         total = sum(d for _, d in seq)

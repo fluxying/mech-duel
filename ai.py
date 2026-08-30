@@ -8,10 +8,13 @@
 
 import random
 
+from settings import GUARD_MAX, SUPER_MAX
+
 RNG = random.Random(77)
 
-PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT, PLAN_THROW = (
-    "move", "retreat", "melee", "shoot", "block", "jump", "wait", "throw")
+PLAN_MOVE, PLAN_RETREAT, PLAN_MELEE, PLAN_SHOOT, PLAN_BLOCK, PLAN_JUMP, PLAN_WAIT, PLAN_THROW, PLAN_SUPER = (
+    "move", "retreat", "melee", "shoot", "block", "jump", "wait", "throw",
+    "super")
 
 
 class AIController:
@@ -41,13 +44,17 @@ class AIController:
         # ---- 反应性防御 ----
         if self.plan not in (PLAN_BLOCK,):
             o_windup = o.state == "melee" and o.t < 16
+            # 自身防御槽告急 → 少格挡多跳（防被 GUARD BREAK）
+            guard_low = m.guard <= GUARD_MAX * 0.35
             if o_windup and dist < 80 and RNG.random() < 0.035:
-                self._set_plan(PLAN_BLOCK, RNG.randint(16, 30))
+                self._set_plan(PLAN_JUMP if guard_low else PLAN_BLOCK,
+                               RNG.randint(16, 30))
             incoming = [b for b in getattr(self, "bolts_ref", [])
                         if b.owner is o and (b.x - m.x) * towards > 0
                         and abs(b.x - m.x) < 90]
             if incoming and RNG.random() < 0.05:
-                self._set_plan(RNG.choice([PLAN_JUMP, PLAN_BLOCK]),
+                self._set_plan(RNG.choice([PLAN_JUMP] * (3 if guard_low else 1)
+                                          + [PLAN_BLOCK]),
                                RNG.randint(12, 24))
             # 对手防御站桩 → 抓投破防
             if (o.state == "block" and dist < 44 and m.throw_cd <= 0
@@ -74,6 +81,10 @@ class AIController:
     def _decide(self, dist, towards):
         m, o = self.mech, self.opponent
         r = RNG.random()
+        # 超必杀槽满：找机会直接放（中远距离优先）
+        if m.super >= SUPER_MAX and dist > 40 and r < 0.45:
+            self._set_plan(PLAN_SUPER, 8)
+            return
         if dist > 150:
             if m.energy >= 35 and r < 0.35:
                 self._set_plan(PLAN_SHOOT, 8)
@@ -136,6 +147,8 @@ class AIController:
             inp["ranged"] = True
         elif self.plan == PLAN_THROW:
             inp["throw"] = True
+        elif self.plan == PLAN_SUPER:
+            inp["super"] = True
         elif self.plan == PLAN_BLOCK:
             inp["block"] = True
         elif self.plan == PLAN_JUMP:

@@ -15,7 +15,11 @@ from settings import (INTERNAL_W, INTERNAL_H, WINDOW_W, WINDOW_H, FPS, TITLE,
                       KO_SLOW_FRAMES, HITSTOP_FRAMES, MIN_SEPARATION,
                       ARENA_LEFT, ARENA_RIGHT, GROUND_Y, BLOCK_REDUCE,
                       MELEE_WINDUP, THROW_HIT_T, THROW_RANGE,
-                      AIR_MELEE_ACTIVE, AIR_MELEE_MULT, RANGED_DAMAGE)
+                      AIR_MELEE_ACTIVE, AIR_MELEE_MULT, RANGED_DAMAGE,
+                      RANGED_COST, ENERGY_MAX,
+                      SUPER_MAX, SUPER_GAIN_HIT, SUPER_GAIN_TAKE,
+                      SUPER_GAIN_BLOCK, SUPER_FLASH_FRAMES,
+                      GUARD_MAX, AZURE_SUPER_BOLT_DMG, JUMP_SEP_Y)
 from assets import build_mech_frames, build_background, get_font
 from mech import Mech
 from effects import Fx
@@ -114,7 +118,7 @@ class Fight:
         self.t += 1
         if self.hitstop > 0:                 # 命中顿帧：世界冻结但粒子继续
             self.hitstop -= 1
-            self.fx.update()
+            self.fx.update(frozen=True)
             return
 
         self.phase_t += 1
@@ -134,6 +138,7 @@ class Fight:
             self._read_inputs(keys)
             self.p1.update(self.p2, self.fx, self.sfx)
             self.p2.update(self.p1, self.fx, self.sfx)
+            self._super_cinematic()          # 超必杀发动定格演出
             self._spawn_slashes()
             self._separate()
             self._combat()
@@ -163,6 +168,16 @@ class Fight:
                 self.reset_round()
 
     # -------------------------------------------------- 判定
+    def _super_cinematic(self):
+        """超必杀发动瞬间：全局定格 + 白闪 + 震屏 + 专属音效。"""
+        for m in (self.p1, self.p2):
+            if m.super_pending:
+                m.super_pending = False
+                self.hitstop = SUPER_FLASH_FRAMES
+                self.fx.flash(150)
+                self.fx.shake(6)
+                self.sfx.play("super")
+
     def _spawn_slashes(self):
         from settings import MELEE_WINDUP
         for m in (self.p1, self.p2):
@@ -175,7 +190,7 @@ class Fight:
         a, b = self.p1, self.p2
         if a.state == "ko" or b.state == "ko":
             return
-        if abs(a.y - b.y) > 40:
+        if abs(a.y - b.y) > JUMP_SEP_Y:   # 高度差够大（跳到头顶以上）不再互推
             return
         dx = b.x - a.x
         if abs(dx) < MIN_SEPARATION:
@@ -185,6 +200,28 @@ class Fight:
             b.x = max(ARENA_LEFT, min(ARENA_RIGHT, b.x + s * push))
 
     def _combat(self):
+        # 超必杀槽位结算（命中双方都积攒）
+        def meter(atk, dfn, res):
+            if res in ("hit", "break"):
+                atk.super = min(SUPER_MAX, atk.super + SUPER_GAIN_HIT)
+                dfn.super = min(SUPER_MAX, dfn.super + SUPER_GAIN_TAKE)
+            elif res == "blocked":
+                dfn.super = min(SUPER_MAX, dfn.super + SUPER_GAIN_BLOCK)
+
+        # 超必杀判定：GARNET「熔核冲击」冲撞（AZURE 射击型走光束判定）
+        for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
+            hb = atk.super_hitbox()
+            if hb is None or atk.super_did_hit:
+                continue
+            if hb.colliderect(dfn.body_rect()):
+                atk.super_did_hit = True
+                res = dfn.take_damage(atk.spec["super_damage"], atk.facing,
+                                      self.fx, self.sfx,
+                                      heavy=True, unblockable=True, launch=True)
+                self.fx.shake(8)
+                if res == "ko":
+                    self._on_ko()
+                meter(atk, dfn, "hit")
         # 投技判定：THROW_HIT_T 帧抓取范围内地面目标，无视格挡（破防手段）
         for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
             if (atk.state == "throw" and atk.t == THROW_HIT_T
@@ -200,6 +237,7 @@ class Fight:
                         self.hitstop = HITSTOP_FRAMES + 3
                     elif res == "ko":
                         self._on_ko()
+                    meter(atk, dfn, "hit")
         # 近战判定
         for atk, dfn in ((self.p1, self.p2), (self.p2, self.p1)):
             hb = atk.melee_hitbox()
@@ -214,7 +252,8 @@ class Fight:
                 if res is None:            # 对方无敌帧：判定不消耗，攻击穿透
                     continue
                 atk.melee_did_hit = True
-                if res == "hit":
+                meter(atk, dfn, res)
+                if res == "hit" or res == "break":
                     self.hitstop = HITSTOP_FRAMES
                 elif res == "ko":
                     self._on_ko()
@@ -230,6 +269,7 @@ class Fight:
                 if res is None:            # 无敌帧：光束穿透不消失
                     continue
                 bolt.dead = True
+                meter(bolt.owner, target, res)
                 if res == "ko":
                     self._on_ko()
 
@@ -320,6 +360,7 @@ def run_window():
 
     demo = "--demo" in sys.argv            # 演示模式：AI 对 AI，直接开打
     scene = FIGHT if demo else MENU
+    fight = None                           # 菜单场景下尚无对战实例
     if demo:
         fight = Fight("demo", frames, bg, sfx)
     menu_t = 0
@@ -373,6 +414,11 @@ def run_window():
         scaled = pygame.transform.scale(frame, (WINDOW_W, WINDOW_H))
         screen.blit(scaled, (0, 0))
         screen.blit(scanlines, (0, 0))
+        flash_a = fight.fx.flash_a if fight else 0
+        if flash_a > 0:                       # 超必杀发动全屏白闪
+            overlay = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+            overlay.fill((255, 250, 235, int(min(255, flash_a))))
+            screen.blit(overlay, (0, 0))
         pygame.display.flip()
         clock.tick(FPS)
 
@@ -535,6 +581,144 @@ def selftest():
     assert f9c.p1.state == "dash", f"双击前方未触发前冲: {f9c.p1.state}"
     assert f9c.p1.x > 200, "前冲未产生位移"
     print("[9] 后撤步无敌 + 双击冲刺/后撤: OK")
+
+    # 10) 命中取消：斩击命中后摇可取消接光束（连段核心）
+    f10 = Fight("2p", frames, bg, sfx)
+    f10.phase = ACTIVE
+    f10.p1.x, f10.p2.x = 200, 232
+    f10.p1.state = "melee"
+    f10.p1.t = MELEE_WINDUP + 1
+    f10.p1.melee_did_hit = False
+    f10.step(FakeKeys({pygame.K_j: True}))
+    assert f10.p2.hp < f10.p2.max_hp, "斩击未命中"
+    assert f10.p1.melee_did_hit
+    for _ in range(12):                    # 命中顿帧结束后按 K 取消
+        f10.step(FakeKeys({pygame.K_k: True}))
+        if f10.p1.state == "shoot":
+            break
+    assert f10.p1.state == "shoot", f"命中取消失败: {f10.p1.state}"
+    print("[10] 命中取消连段: OK")
+
+    # 11) 受身：浮空受击落地后按住防 → 快速起身 + 起身无敌
+    f11 = Fight("2p", frames, bg, sfx)
+    f11.phase = ACTIVE
+    f11.p1.state = "hurt"
+    f11.p1.t = 3
+    f11.p1._air_hurt = True
+    f11.p1.y = GROUND_Y - 1
+    f11.p1.vy = 0.2
+    f11.p1._stun_extra = 0
+    keys = FakeKeys({pygame.K_s: True})
+    for _ in range(8):
+        f11.step(keys)
+        if f11.p1.state == "idle":
+            break
+    assert f11.p1.state == "idle", f"受身未生效: {f11.p1.state}"
+    assert f11.p1.wake_invuln > 0 and f11.p1.invuln, "受身起身无敌缺失"
+    print("[11] 受身起身 + 无敌: OK")
+
+    # 12) GARNET 超必杀「熔核冲击」：冲撞命中击飞
+    f12 = Fight("2p", frames, bg, sfx)
+    f12.phase = ACTIVE
+    f12.p1.x, f12.p2.x = 200, 280
+    f12.p1.super = SUPER_MAX
+    f12.step(FakeKeys({pygame.K_i: True}))
+    assert f12.p1.state == "super", f"未进入超必杀: {f12.p1.state}"
+    assert f12.hitstop == SUPER_FLASH_FRAMES, "发动定格演出缺失"
+    assert f12.p1.invuln and f12.p1.super == 0
+    for _ in range(150):
+        f12.step(FakeKeys({}))
+        if f12.p2.hp < f12.p2.max_hp:
+            break
+    assert f12.p2.hp <= f12.p2.max_hp - f12.p1.spec["super_damage"], "冲撞未命中"
+    assert f12.p2.state in ("thrown", "hurt")
+    print("[12] GARNET 超必杀冲撞: OK")
+
+    # 13) AZURE 超必杀「苍蓝齐射」：三连强化光束
+    f13 = Fight("2p", frames, bg, sfx)
+    f13.phase = ACTIVE
+    f13.p1.x, f13.p2.x = 160, 320
+    f13.p2.super = SUPER_MAX
+    f13.step(FakeKeys({pygame.K_4: True}))
+    assert f13.p2.state == "super", f"未进入超必杀: {f13.p2.state}"
+    for _ in range(90):
+        f13.step(FakeKeys({}))
+        if f13.fx.bolts:
+            break
+    assert f13.fx.bolts, "苍蓝齐射未发射"
+    assert f13.fx.bolts[0].dmg == AZURE_SUPER_BOLT_DMG and f13.fx.bolts[0].big
+    for _ in range(90):
+        f13.step(FakeKeys({}))
+        if f13.p1.hp < f13.p1.max_hp:
+            break
+    assert f13.p1.hp <= f13.p1.max_hp - AZURE_SUPER_BOLT_DMG, "强化光束未命中"
+    print("[13] AZURE 超必杀齐射: OK")
+
+    # 14) 破防槽：连续格挡耗尽防御槽 → GUARD BREAK
+    f14 = Fight("2p", frames, bg, sfx)
+    f14.p2.state = "block"
+    f14.p2.guard = GUARD_MAX
+    for _ in range(9):
+        assert f14.p2.take_damage(RANGED_DAMAGE, 1, f14.fx, sfx) == "blocked"
+    assert f14.p2.guard > 0, "防御槽过早耗尽"
+    res = f14.p2.take_damage(RANGED_DAMAGE, 1, f14.fx, sfx)
+    assert res == "break", f"未破防: {res}"
+    assert f14.p2.state == "guard_break" and f14.p2.guard == 0
+    print("[14] GUARD BREAK 破防: OK")
+
+    # 15) 跳跃可越过对手：贴脸起跳横移，落地位置应越过对手头顶到另一侧
+    f15 = Fight("2p", frames, bg, sfx)
+    f15.phase = ACTIVE
+    f15.p1.x, f15.p2.x = 200, 226           # 贴脸（间隔 26 = 最小推挤距离）
+    x0 = f15.p1.x
+    # 若跳起后成功越过，p1 会落到对手另一侧，即与初始位置分居对手两侧
+    keys = FakeKeys({pygame.K_w: True, pygame.K_d: True})   # 跳 + 右
+    landed = False
+    for _ in range(240):
+        f15.step(keys)
+        if f15.p1.grounded:
+            landed = True
+            break
+    assert landed, "跳跃未落地"
+    assert (f15.p1.x - f15.p2.x) * (x0 - f15.p2.x) < 0, \
+        f"跳跃未能越过对手（p1 起点 {x0:.0f} 落地 {f15.p1.x:.0f} 对手 {f15.p2.x:.0f}）"
+    print("[15] 跳跃越过对手: OK")
+
+    # 16) 空中射击：跳跃中按 K 可发射、保留水平动量、斜下弹道命中地面目标
+    f16 = Fight("2p", frames, bg, sfx)
+    f16.phase = ACTIVE
+    f16.p1.x, f16.p2.x = 200, 300           # 中距离（贴脸时弹来不及下坠属正常）
+    f16.p1.y = GROUND_Y - 40
+    f16.p1.vy = 0
+    f16.p1.vx = 2.0
+    f16.p1.state = "jump"
+    keys = FakeKeys({pygame.K_k: True})
+    f16.step(keys)
+    assert f16.p1.state == "shoot", f"空中射击未触发: {f16.p1.state}"
+    for _ in range(3):
+        f16.step(keys)
+    assert f16.p1.vx > 1.5, f"空中射击丢失水平动量: vx={f16.p1.vx:.2f}"
+    spent = False
+    for _ in range(60):
+        f16.step(keys)
+        if f16.p1.energy < ENERGY_MAX:
+            spent = True
+        if f16.p2.hp < f16.p2.max_hp:
+            break
+    assert spent, "空中射击未消耗能量发射"
+    assert f16.p2.hp < f16.p2.max_hp, "空中射击未命中地面目标"
+    # 弹道应为斜向下（高度越高下坠越快）
+    fx16 = Fx()
+    m16 = Mech("garnet", 200, 1, frames)
+    m16.y = GROUND_Y - 60
+    fx16.spawn_bolt(m16, 221, m16.y - 38)
+    b = fx16.bolts[0]
+    y0 = b.y
+    for _ in range(12):
+        b.update(fx16)
+    assert b.y > y0, f"空中射击弹道未斜向下（y 增量 {b.y - y0:.1f}）"
+    assert b.vy > 0
+    print("[16] 空中射击（斜向下弹道）: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

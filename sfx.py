@@ -75,6 +75,10 @@ class Sfx:
                 "win":   _sound(_concat(_square(0.1, 523, 523, 0.24),
                                         _square(0.1, 659, 659, 0.24),
                                         _square(0.22, 784, 784, 0.28))),
+                "super": _sound(_concat(_square(0.3, 220, 880, 0.3),
+                                        _noise(0.22, 0.18))),
+                "break": _sound(_concat(_noise(0.3, 0.3),
+                                        _square(0.25, 420, 60, 0.3))),
             }
             self.ok = True
         except Exception:
