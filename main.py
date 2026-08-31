@@ -327,7 +327,7 @@ class Fight:
                 self.sfx.play("super")
 
     def _spawn_slashes(self):
-        from settings import MELEE_WINDUP
+        from settings import MELEE_WINDUP, BOLT_PALETTES
         for m in (self.p1, self.p2):
             if m.state == "melee" and m.t == MELEE_WINDUP:
                 self.fx.slash(m)
@@ -337,14 +337,16 @@ class Fight:
                     and m.move is not None
                     and m.t == m.move["windup"]):
                 key = m.move_key or ""
-                scale, cool = 1.0, False
+                scale = 1.0
                 if "fwd" in key or key == "od":
                     scale = 1.35          # 前重/OD：大弧光
                 elif "back" in key:
-                    scale, cool = 1.05, True   # 后重：青色横扫
+                    scale = 1.05          # 后重：窄弧光
                 elif key == "air_heavy":
                     scale = 1.15
-                self.fx.slash(m, scale=scale, cool=cool)
+                # 弧光取机体光束主色：四机各具专属色（红橙/青蓝/酸绿/电紫）
+                self.fx.slash(m, scale=scale,
+                              col=BOLT_PALETTES[m.spec["bolt_color"]]["S"])
 
     def _separate(self):
         a, b = self.p1, self.p2
@@ -2087,6 +2089,34 @@ def selftest():
     assert shots35f >= 3, f"疾影射线连射数不足: {shots35f}"
     assert f35f.p1.x > 120, "疾影射线未滑步"
     print("[35] 超必杀差异化（天降/追踪/瞬步/瞬移/霸体/贯穿）: OK")
+
+    # 36) 重击动作差异化：anim 三元组 + 机内三变体判定相互异 + 渲染链贯通
+    from assets import FRAMES as _FR
+    for mk in MECH_ORDER:
+        trio = [MOVE_DEFS[mk][k] for k in ("heavy", "fwd_heavy", "back_heavy")]
+        for d in trio:
+            if "anim" in d:
+                for fn in d["anim"]:
+                    assert fn in _FR, f"{mk} anim 帧不存在: {fn}"
+        act = [d.get("anim", ("atk0", "atk1", "atk2"))[1] for d in trio]
+        assert len(set(act)) == 3, f"{mk} 三重击判定相动作雷同: {act}"
+    assert _FR["bash"][3] is None and _FR["toss"][3] is None, "bash/toss 应无光剑"
+    f36 = Fight("2p", frames, bg, sfx, m1="azure")
+    f36.phase = ACTIVE
+    m36 = f36.p1
+    m36.state = "heavy"
+    m36.move_key = "fwd_heavy"
+    m36.move = MOVE_DEFS["azure"]["fwd_heavy"]
+    m36.t = m36.move["windup"] + 1
+    assert m36.current_frame_name() == "thrust",     f"azure 突刺帧缺失: {m36.current_frame_name()}"
+    assert m36.frames["p2"]["thrust"][1], "thrust 帧未构建"
+    m36b = Fight("2p", frames, bg, sfx).p1           # garnet：肩撞（无剑）
+    m36b.state = "heavy"
+    m36b.move_key = "fwd_heavy"
+    m36b.move = MOVE_DEFS["garnet"]["fwd_heavy"]
+    m36b.t = m36b.move["windup"] + 1
+    assert m36b.current_frame_name() == "bash",     f"garnet 肩撞帧缺失: {m36b.current_frame_name()}"
+    print("[36] 重击动作差异化（突刺/升斩/低扫/肩撞/投掷）: OK")
 
     print("SELFTEST PASS")
     pygame.quit()

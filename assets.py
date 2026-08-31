@@ -257,6 +257,13 @@ FRAMES = {
     "atk0":  ("atk0",  UPPER_ATK0,  LEGS_WALK_A, (23, 9, -145, 13)),
     "atk1":  ("atk1",  UPPER_ATK1,  LEGS_WALK_A, (25, 10, -8, 14)),
     "atk2":  ("atk2",  UPPER_IDLE,  LEGS_WALK_A, (26, 13, 35, 11)),
+    # 重击变体专属动作帧（复用上身像素 + 光剑参数重组，无新画）：
+    # thrust=水平直刺 rise=升斩 sweep=下段低扫 bash=无剑肩撞 toss=空手投掷
+    "thrust": ("thrust", UPPER_ATK1, LEGS_WALK_A, (24, 10, 0, 15)),
+    "rise":   ("rise",   UPPER_ATK1, LEGS_IDLE,   (25, 13, -72, 13)),
+    "sweep":  ("sweep",  UPPER_ATK1, LEGS_WALK_B, (27, 13, 28, 13)),
+    "bash":   ("bash",   UPPER_ATK1, LEGS_WALK_A, None),
+    "toss":   ("toss",   UPPER_ATK0, LEGS_WALK_B, None),
     "shoot": ("shoot", UPPER_SHOOT0, LEGS_WALK_A, (26, 14, -60, 7)),
     "block": ("block", UPPER_BLOCK, LEGS_IDLE,  None),
     "hurt":  ("hurt",  UPPER_HURT,  LEGS_IDLE,  (25, 9, -115, 8)),

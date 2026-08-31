@@ -1114,10 +1114,15 @@ class Mech:
                 return "atk0"
             return "atk1" if self.t < self.dim_t0 + 6 else "atk2"
         if st in (HEAVY, AIR_HEAVY, SPECIAL, DREVERSAL):
-            # MOVE_DEFS 驱动：按相位取帧
+            # MOVE_DEFS 驱动：按相位取帧（anim 三元组指定各相位专属动作）
             d = self.move or {}
             w0 = d.get("windup", 9)
             a1 = w0 + d.get("active", 5)
+            anim = d.get("anim")
+            if anim:
+                if self.t < w0:
+                    return anim[0]
+                return anim[1] if self.t < a1 else anim[2]
             if self.t < w0:
                 return "atk0"
             if self.t < a1:

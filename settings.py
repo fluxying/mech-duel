@@ -285,45 +285,65 @@ def combo_scale(count):
 #   轻+束同按+前方向=OD 强化技（6B 接入，耗 1 格 Drive）。
 # 旗标：launch=命中击倒/浮空；guard_mult=对防御槽伤害倍率；lunge/rush=判定相突进速度；
 #   armor=全程霸体（吃半伤不中断）；pull=命中拉近 px；bolt=弹体参数（speed/vy/grav/
-#   dist 射程/delay 静置延时/shots 连发数/interval 连发间隔/mine 落地布雷）。
+#   dist 射程/delay 静置延时/shots 连发数/interval 连发间隔/mine 落地布雷）；
+#   anim=(前摇,判定,收招) 帧名三元组（thrust直刺/rise升斩/sweep低扫/bash无剑肩撞/
+#   toss空手投掷，见 assets.FRAMES），缺省 atk0/atk1/atk2 通用挥击。
 SPECIAL_CD = 30                  # 特殊技结束后的射击系共享冷却
 MOVE_DEFS = {
     "garnet": {
         "heavy":      {"name": "重击",     "windup": 14, "active": 5,  "recover": 20, "dmg": 18, "range": 44, "launch": True},
-        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 22, "range": 48, "guard_mult": 1.5, "lunge": 2.0},
-        "back_heavy": {"name": "横扫",     "windup": 15, "active": 6,  "recover": 22, "dmg": 18, "range": 46, "launch": True, "retreat": True},
+        "fwd_heavy":  {"name": "烈突",     "windup": 16, "active": 6,  "recover": 24, "dmg": 22, "range": 48, "guard_mult": 1.5, "lunge": 2.0,
+                       "anim": ("atk0", "bash", "atk2")},       # 肩甲冲撞（无剑）
+        "back_heavy": {"name": "横扫",     "windup": 15, "active": 6,  "recover": 22, "dmg": 18, "range": 46, "launch": True, "retreat": True,
+                       "anim": ("atk0", "sweep", "atk2")},      # 下段低扫
         "air_heavy":  {"name": "踏压",     "windup": 8,  "active": 8,  "recover": 8,  "dmg": 15, "range": 36, "launch": True},
-        "dash_light": {"name": "装甲冲撞", "windup": 12, "active": 8,  "recover": 22, "dmg": 13, "range": 40, "armor": True, "launch": True, "rush": 3.2},
+        "dash_light": {"name": "装甲冲撞", "windup": 12, "active": 8,  "recover": 22, "dmg": 13, "range": 40, "armor": True, "launch": True, "rush": 3.2,
+                       "anim": ("atk0", "bash", "atk2")},
         "fwd_bolt":   {"name": "熔核喷发", "windup": 10, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.2, "dist": 90}},
         "od":         {"name": "熔核喷发EX", "windup": 8, "active": 6, "recover": 18, "dmg": 14, "bolt": {"speed": 3.4, "dist": 140, "shots": 2, "interval": 6}},
         "back_bolt":  None,
     },
     "azure": {
         "heavy":      {"name": "重击",     "windup": 12, "active": 5,  "recover": 18, "dmg": 18, "range": 42, "launch": True},
-        "fwd_heavy":  {"name": "突蹴",     "windup": 13, "active": 6,  "recover": 20, "dmg": 21, "range": 46, "lunge": 2.0},
-        "back_heavy": {"name": "对空斩",   "windup": 10, "active": 6,  "recover": 18, "dmg": 16, "range": 42, "launch": True},
+        "fwd_heavy":  {"name": "突蹴",     "windup": 13, "active": 6,  "recover": 20, "dmg": 21, "range": 46, "lunge": 2.0,
+                       "anim": ("atk0", "thrust", "atk2")},     # 剑术突刺
+        "back_heavy": {"name": "对空斩",   "windup": 10, "active": 6,  "recover": 18, "dmg": 16, "range": 42, "launch": True,
+                       "anim": ("atk0", "rise", "atk2")},       # 升斩
         "air_heavy":  {"name": "俯冲刃",   "windup": 7,  "active": 8,  "recover": 6,  "dmg": 14, "range": 34, "launch": True},
-        "dash_light": {"name": "相位刺",   "windup": 10, "active": 6,  "recover": 16, "dmg": 14, "range": 40, "rush": 3.6},
-        "fwd_bolt":   {"name": "裂地光刃", "windup": 12, "active": 4,  "recover": 22, "dmg": 7,  "bolt": {"speed": 4.4, "dist": 200}},
-        "od":         {"name": "相位刺EX", "windup": 8,  "active": 8,  "recover": 18, "dmg": 18, "range": 52, "rush": 4.0, "launch": True},
+        "dash_light": {"name": "相位刺",   "windup": 10, "active": 6,  "recover": 16, "dmg": 14, "range": 40, "rush": 3.6,
+                       "anim": ("atk0", "thrust", "atk2")},
+        "fwd_bolt":   {"name": "裂地光刃", "windup": 12, "active": 4,  "recover": 22, "dmg": 7,  "bolt": {"speed": 4.4, "dist": 200},
+                       "anim": ("atk0", "sweep", "atk2")},      # 贴地斩出
+        "od":         {"name": "相位刺EX", "windup": 8,  "active": 8,  "recover": 18, "dmg": 18, "range": 52, "rush": 4.0, "launch": True,
+                       "anim": ("atk0", "thrust", "atk2")},
         "back_bolt":  None,
     },
     "verdant": {
         "heavy":      {"name": "重击",     "windup": 13, "active": 5,  "recover": 19, "dmg": 19, "range": 43, "launch": True},
-        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 22, "range": 45, "launch": True, "lunge": 1.8},
-        "back_heavy": {"name": "扫击",     "windup": 14, "active": 6,  "recover": 20, "dmg": 17, "range": 44, "launch": True, "retreat": True},
-        "air_heavy":  {"name": "种子散布", "windup": 6,  "active": 10, "recover": 8,  "dmg": 4,  "range": 30, "bolt": {"speed": 0, "vy": 0.6, "delay": 45, "drop": True, "shots": 2, "interval": 6}},
-        "dash_light": {"name": "藤蔓勾拉", "windup": 11, "active": 6,  "recover": 18, "dmg": 14, "range": 42, "pull": 34, "launch": True},
-        "fwd_bolt":   {"name": "弧线榴弹", "windup": 12, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.4, "vy": -4.0, "grav": 0.24}},
-        "od":         {"name": "弧线榴弹EX", "windup": 10, "active": 4, "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24, "shots": 2, "interval": 8}},
-        "back_bolt":  {"name": "种子地雷", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 0, "delay": 60, "mine": True}},
+        "fwd_heavy":  {"name": "鞭腿",     "windup": 15, "active": 6,  "recover": 21, "dmg": 22, "range": 45, "launch": True, "lunge": 1.8,
+                       "anim": ("atk0", "rise", "atk2")},       # 上段抽击（浮空入口）
+        "back_heavy": {"name": "扫击",     "windup": 14, "active": 6,  "recover": 20, "dmg": 17, "range": 44, "launch": True, "retreat": True,
+                       "anim": ("atk0", "sweep", "atk2")},
+        "air_heavy":  {"name": "种子散布", "windup": 6,  "active": 10, "recover": 8,  "dmg": 4,  "range": 30, "bolt": {"speed": 0, "vy": 0.6, "delay": 45, "drop": True, "shots": 2, "interval": 6},
+                       "anim": ("toss", "bash", "atk2")},       # 空手抛撒
+        "dash_light": {"name": "藤蔓勾拉", "windup": 11, "active": 6,  "recover": 18, "dmg": 14, "range": 42, "pull": 34, "launch": True,
+                       "anim": ("atk0", "bash", "atk2")},       # 空手抓拉
+        "fwd_bolt":   {"name": "弧线榴弹", "windup": 12, "active": 4,  "recover": 18, "dmg": 10, "bolt": {"speed": 3.4, "vy": -4.0, "grav": 0.24},
+                       "anim": ("toss", "bash", "atk2")},       # 举手投掷
+        "od":         {"name": "弧线榴弹EX", "windup": 10, "active": 4, "recover": 18, "dmg": 9,  "bolt": {"speed": 2.8, "vy": -4.0, "grav": 0.24, "shots": 2, "interval": 8},
+                       "anim": ("toss", "bash", "atk2")},
+        "back_bolt":  {"name": "种子地雷", "windup": 12, "active": 4,  "recover": 20, "dmg": 8,  "bolt": {"speed": 0, "delay": 60, "mine": True},
+                       "anim": ("toss", "bash", "atk2")},
     },
     "violet": {
         "heavy":      {"name": "雷击",     "windup": 12, "active": 5,  "recover": 19, "dmg": 18, "range": 42, "launch": True},
-        "fwd_heavy":  {"name": "雷突",     "windup": 13, "active": 6,  "recover": 20, "dmg": 20, "range": 46, "lunge": 2.0},
-        "back_heavy": {"name": "电扫",     "windup": 11, "active": 6,  "recover": 18, "dmg": 15, "range": 42, "launch": True, "retreat": True},
+        "fwd_heavy":  {"name": "雷突",     "windup": 13, "active": 6,  "recover": 20, "dmg": 20, "range": 46, "lunge": 2.0,
+                       "anim": ("atk0", "thrust", "atk2")},     # 电光突刺
+        "back_heavy": {"name": "电扫",     "windup": 11, "active": 6,  "recover": 18, "dmg": 15, "range": 42, "launch": True, "retreat": True,
+                       "anim": ("atk0", "sweep", "atk2")},
         "air_heavy":  {"name": "雷坠",     "windup": 7,  "active": 8,  "recover": 6,  "dmg": 13, "range": 34, "launch": True},
-        "dash_light": {"name": "雷殛突进", "windup": 9,  "active": 6,  "recover": 14, "dmg": 13, "range": 40, "rush": 4.2, "launch": True},
+        "dash_light": {"name": "雷殛突进", "windup": 9,  "active": 6,  "recover": 14, "dmg": 13, "range": 40, "rush": 4.2, "launch": True,
+                       "anim": ("atk0", "thrust", "atk2")},
         "fwd_bolt":   {"name": "电光球",   "windup": 11, "active": 4,  "recover": 18, "dmg": 8,  "bolt": {"speed": 3.8, "dist": 160}},
         "od":         {"name": "雷暴EX",   "windup": 9,  "active": 4,  "recover": 18, "dmg": 8,  "bolt": {"speed": 4.0, "dist": 160, "shots": 3, "interval": 4}},
         "back_bolt":  None,
@@ -354,7 +374,8 @@ DREV_RANGE = 42
 DREV_FRAMES = (8, 4, 16)
 WALL_SPLASH_STUN = 40            # 墙崩眩晕帧（GBREAK 复用）
 REVERSAL_DEF = {"name": "逆转反技", "windup": 8, "active": 4, "recover": 16,
-                "dmg": DREV_DMG, "range": DREV_RANGE, "launch": True}
+                "dmg": DREV_DMG, "range": DREV_RANGE, "launch": True,
+                "anim": ("atk0", "thrust", "atk2")}
 
 # ---------------------------------------------------------------- 阶段3：第三机甲专属超必杀 / AI 难度
 VERDANT_SUPER_VY = -4.8           # 榴弹初速（向上）
