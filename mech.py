@@ -128,6 +128,7 @@ class Mech:
         self.parry_rush = 0       # 完美格挡后免费绿冲窗口剩余帧
         self.stagger = 0          # 被完美格挡后的踉跄帧
         self.dash_rush = False    # 当前冲刺是否为 Drive Rush
+        self.ghost_cd = 0         # 运动签名残影快照冷却（Fight._spawn_ghosts）
         self.dim_t0 = None        # Drive 冲击出手帧（None=蓄力中）
         self.super_level = 1      # 本局超必杀等级（1-3）
         self.gb_stun = GUARD_BREAK_STUN  # 破防/墙崩硬直帧（墙崩较短）
@@ -994,6 +995,8 @@ class Mech:
             return None
         if self.invuln:
             return None
+        if self.knockdown:                # 倒地（躺地帧）：攻击穿透，留起身机会
+            return None                   #   否则会被无限压起身连打、硬直反复刷新
 
         if self.armor_on and not unblockable:
             # 霸体：吃半伤不中断动作（返回 'armor'，攻击方判定照常消耗）
@@ -1162,7 +1165,8 @@ class Mech:
             pos -= d
         return seq[0][0]
 
-    def draw(self, surf, t):
+    def draw_pose(self, t):
+        """当前姿态 (帧图, x偏移, y偏移)——draw() 与运动签名残影快照同源。"""
         name = self.current_frame_name()
         key = f"flash{self.facing}" if self.flash > 0 else self.facing
         img = self.frames[self.palette][name][key]
@@ -1177,7 +1181,10 @@ class Mech:
             y_off += PIX
         if self.state == SHOOT and self.t >= SHOOT_FIRE_T:
             x_off -= self.facing * PIX
+        return img, x_off, y_off
 
+    def draw(self, surf, t):
+        img, x_off, y_off = self.draw_pose(t)
         surf.blit(img, (x_off, y_off))
 
         # 防御能量护盾弧

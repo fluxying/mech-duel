@@ -252,6 +252,22 @@ VIOLET_HOME_TURN = 0.06           # 追踪电弹每帧转向（弧度）
 VERDANT_RAIN_VY = 5.2             # 天降轰炸初速（竖直下落）
 VERDANT_RAIN_GRAV = 0.10          # 天降轰炸重力（微加速）
 RAIN_TOP = -24                    # 天降弹生成高度（屏幕外上方）
+
+# ---------------------------------------------------------------- 运动签名
+# 批次 C：高速位移残影（纯表现层，不参与判定/不进回放快照）。按调色板索引。
+# interval: 拍快照帧间隔（越小越密）  life: 残影存活帧  tint: 残影剪影染色
+# dust_burst / petals / bolt: 拍快照时的伴随表现（起冲尘暴 / 花瓣拖尾 / 锯齿电弧）
+AFTERIMAGE_STYLES = {
+    "p1": {"interval": 5, "life": 16, "tint": (255, 130, 60),
+           "dust_burst": True},   # GARNET 熔渣余像：少而厚、残留久，起冲扬尘
+    "p2": {"interval": 2, "life": 9, "tint": (110, 200, 255)},
+    # ^ AZURE 相位残像：细密、快速淡出
+    "p3": {"interval": 3, "life": 13, "tint": (120, 240, 130),
+           "petals": True},       # VERDANT 花瓣拖尾：残影 + 飘落绿瓣
+    "p4": {"interval": 2, "life": 13, "tint": (190, 130, 255),
+           "bolt": True},         # VIOLET 闪电残像：残影最密 + 锯齿电弧
+}
+
 # 破防槽（防御槽）：满槽起手，格挡消耗，耗尽则防御崩坏（大硬直，期间无法防御）
 GUARD_MAX = 100
 GUARD_REGEN = 0.15              # 每帧回复

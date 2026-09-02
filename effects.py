@@ -42,6 +42,50 @@ class Particle:
         surf.fill(col, (int(self.x), int(self.y), s, s))
 
 
+class AfterImage:
+    """运动签名残影：机甲帧的单色染色快照，逐帧淡出（纯表现，不参与判定）。
+
+    染色用 BLEND_RGBA_MULT 整面乘签名色：亮部染出剪影、暗部趋黑，
+    调色板细节被压掉、只留运动轨迹感。bolt=True 时在拍摄瞬间一次性画上
+    锯齿电弧（VIOLET 电光残像），之后随本体一起淡出。
+    """
+
+    __slots__ = ("img", "x", "y", "life", "max_life")
+
+    def __init__(self, img, x, y, life, tint, bolt=False):
+        self.img = img.copy()
+        if len(tint) == 3:                       # 补满 alpha=255，勿削剪影
+            tint = tuple(tint) + (255,)
+        self.img.fill(tint, special_flags=pygame.BLEND_RGBA_MULT)
+        if bolt:                                 # 电光残像：撒 3 条锯齿短弧
+            iw, ih = self.img.get_size()
+            for _ in range(3):
+                bx = RNG.randint(iw // 5, iw - 5)
+                by = RNG.randint(3, ih - 5)
+                for _ in range(3):
+                    nx = bx + RNG.randint(-5, 5)
+                    ny = by + RNG.randint(-4, 4)
+                    pygame.draw.line(self.img, RNG.choice(
+                        ((190, 150, 255), (240, 232, 255))),
+                        (bx, by), (nx, ny))
+                    bx, by = nx, ny
+        self.x, self.y = x, y
+        self.life = self.max_life = life
+
+    @property
+    def dead(self):
+        return self.life <= 0
+
+    def update(self):
+        self.life -= 1
+
+    def draw(self, surf):
+        if self.life <= 0:
+            return
+        self.img.set_alpha(int(255 * 0.55 * self.life / self.max_life))
+        surf.blit(self.img, (self.x, self.y))
+
+
 class Projectile:
     """光束弹。owner 为发射者，命中其对手。"""
 
@@ -233,6 +277,7 @@ class Fx:
         self.slashes = []
         self.dmg_numbers = []
         self.callouts = []
+        self.ghosts = []               # 运动签名残影（画在机甲层之下）
         self.bolt_sprites = build_bolts()
         self.shake_mag = 0.0
         self.flash_a = 0.0             # 全屏白闪强度（超必杀演出）
@@ -245,6 +290,7 @@ class Fx:
         self.slashes.clear()
         self.dmg_numbers.clear()
         self.callouts.clear()
+        self.ghosts.clear()
         self.shake_mag = 0
         self.flash_a = 0
 
@@ -287,6 +333,30 @@ class Fx:
     def flash(self, alpha):
         """全屏白闪（超必杀发动演出）。"""
         self.flash_a = max(self.flash_a, alpha)
+
+    def afterimage(self, img, x, y, life, tint, bolt=False):
+        """运动签名残影：高速位移时机甲帧的单色淡出快照。"""
+        self.ghosts.append(AfterImage(img, x, y, life, tint, bolt=bolt))
+
+    def petals(self, x, y, n=2):
+        """VERDANT 花瓣拖尾：绿瓣缓慢飘散下落。"""
+        for _ in range(n):
+            self.particles.append(Particle(
+                x + RNG.uniform(-8, 8), y - RNG.uniform(0, 30),
+                RNG.uniform(-0.4, 0.4), RNG.uniform(-0.2, 0.5),
+                RNG.randint(18, 34),
+                RNG.choice(((110, 220, 130), (160, 240, 150), (80, 190, 110))),
+                0.015, 1 if RNG.random() < 0.75 else 2))
+
+    def dust_burst(self, x, y):
+        """GARNET 起冲尘暴：比落地尘更密更重的粗颗粒。"""
+        for _ in range(9):
+            self.particles.append(Particle(
+                x + RNG.uniform(-10, 10), y - RNG.randint(0, 4),
+                RNG.uniform(-1.4, 1.4), RNG.uniform(-1.3, -0.3),
+                RNG.randint(14, 30),
+                COLORS["dust"] if RNG.random() < 0.7 else (170, 110, 70),
+                0.02, 2))
 
     def muzzle_flash(self, x, y, facing):
         for _ in range(6):
@@ -368,6 +438,9 @@ class Fx:
         for s in self.slashes:
             s.update()
         self.slashes = [s for s in self.slashes if not s.dead]
+        for g in self.ghosts:
+            g.update()
+        self.ghosts = [g for g in self.ghosts if not g.dead]
         for d in self.dmg_numbers:
             d.update()
         self.dmg_numbers = [d for d in self.dmg_numbers if not d.dead]
@@ -387,6 +460,11 @@ class Fx:
             return 0, 0
         return (RNG.randint(-int(self.shake_mag), int(self.shake_mag)),
                 RNG.randint(-int(self.shake_mag), int(self.shake_mag)))
+
+    def draw_ghosts(self, surf):
+        """残影层：由场景在绘制机甲之前调用（残影压在机甲之下）。"""
+        for g in self.ghosts:
+            g.draw(surf)
 
     def draw(self, surf, font):
         for s in self.slashes:
